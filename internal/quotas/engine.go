@@ -199,14 +199,21 @@ func startWindow(q *model.QuotaRule, now time.Time) {
 func parseNextClockTime(input string, now time.Time) (time.Time, error) {
 	trimmed := strings.TrimSpace(input)
 	if strings.Contains(trimmed, "T") {
-		target, err := time.ParseInLocation("2006-01-02T15:04", trimmed, now.Location())
-		if err != nil {
-			return time.Time{}, errors.New("invalid date/time format, use YYYY-MM-DDTHH:MM")
+		if target, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+			if !target.After(now) {
+				return time.Time{}, errors.New("reset date/time must be in the future")
+			}
+			return target, nil
 		}
-		if !target.After(now) {
-			return time.Time{}, errors.New("reset date/time must be in the future")
+		for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04"} {
+			if target, err := time.ParseInLocation(layout, trimmed, now.Location()); err == nil {
+				if !target.After(now) {
+					return time.Time{}, errors.New("reset date/time must be in the future")
+				}
+				return target, nil
+			}
 		}
-		return target, nil
+		return time.Time{}, errors.New("invalid date/time format, use RFC3339 or YYYY-MM-DDTHH:MM")
 	}
 
 	parts := strings.Split(trimmed, ":")

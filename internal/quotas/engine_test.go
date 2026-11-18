@@ -211,6 +211,40 @@ func TestApplyActionSetUsageWithCustomHoursAndUntilTime(t *testing.T) {
 	if q.UsedValue != 45 || q.RemainingSeconds != 12600 {
 		t.Fatalf("expected 3h30m (12600s) remaining, got %d (used=%.0f)", q.RemainingSeconds, q.UsedValue)
 	}
+
+	// Simulate UTC server at 19:20 UTC (= 14:20 in UTC-5) receiving same-day future local time 18:00-05:00.
+	utcNow := time.Date(2026, 11, 18, 19, 20, 0, 0, time.UTC)
+	if err := ApplyAction(&q, model.QuotaActionRequest{
+		Action:    "set_usage",
+		Value:     60,
+		UntilTime: "2026-11-18T18:00:00-05:00",
+	}, utcNow); err != nil {
+		t.Fatalf("set_usage with RFC3339 offset failed: %v", err)
+	}
+	if q.ResetsAt != "2026-11-18T23:00:00Z" || q.RemainingSeconds != 13200 {
+		t.Fatalf("expected 2026-11-18T23:00:00Z (13200s), got %s (%ds)", q.ResetsAt, q.RemainingSeconds)
+	}
+
+	// Simulate ISO string with milliseconds from JS Date.toISOString() (13:38 UTC-5 -> 18:38Z).
+	if err := ApplyAction(&q, model.QuotaActionRequest{
+		Action:    "set_usage",
+		Value:     70,
+		UntilTime: "2026-11-19T18:38:00.000Z",
+	}, utcNow); err != nil {
+		t.Fatalf("set_usage with ISO milliseconds failed: %v", err)
+	}
+	if q.ResetsAt != "2026-11-19T18:38:00Z" {
+		t.Fatalf("expected 2026-11-19T18:38:00Z, got %s", q.ResetsAt)
+	}
+
+	// Reject past RFC3339 timestamps cleanly.
+	if err := ApplyAction(&q, model.QuotaActionRequest{
+		Action:    "set_usage",
+		Value:     70,
+		UntilTime: "2026-11-18T14:00:00-05:00",
+	}, utcNow); err == nil {
+		t.Fatalf("expected error for past RFC3339 timestamp")
+	}
 }
 
 func TestComputeActivityStatsStreaksModelsAndHeatmap(t *testing.T) {

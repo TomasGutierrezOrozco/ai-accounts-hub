@@ -2661,10 +2661,32 @@
       if (!els.qmUntilTime.value) {
         return { error: 'Select the exact reset time.', focusEl: els.qmUntilTime };
       }
-      const untilTime = els.qmUntilDate.value
-        ? `${els.qmUntilDate.value}T${els.qmUntilTime.value}`
-        : els.qmUntilTime.value;
-      return { fields: { until_time: untilTime } };
+      const timeParts = els.qmUntilTime.value.split(':').map(Number);
+      const hh = timeParts[0];
+      const mm = timeParts[1];
+      const ss = timeParts[2] || 0;
+      if (Number.isNaN(hh) || Number.isNaN(mm)) {
+        return { error: 'Select a valid exact reset time.', focusEl: els.qmUntilTime };
+      }
+
+      let target;
+      if (els.qmUntilDate.value) {
+        const dateParts = els.qmUntilDate.value.split('-').map(Number);
+        if (dateParts.length !== 3 || dateParts.some(Number.isNaN)) {
+          return { error: 'Select a valid reset date.', focusEl: els.qmUntilDate };
+        }
+        target = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], hh, mm, ss, 0);
+        if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) {
+          return { error: 'Reset date & time must be in the future.', focusEl: els.qmUntilTime };
+        }
+      } else {
+        const now = new Date();
+        target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, ss, 0);
+        if (target.getTime() <= now.getTime()) {
+          target.setDate(target.getDate() + 1);
+        }
+      }
+      return { fields: { until_time: target.toISOString() } };
     }
     return { fields: {} };
   }
