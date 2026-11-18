@@ -42,11 +42,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/presets", s.handlePresets)
 	s.mux.HandleFunc("GET /api/accounts", s.handleListAccounts)
 	s.mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
+	s.mux.HandleFunc("PUT /api/accounts/reorder", s.handleReorderAccounts)
 	s.mux.HandleFunc("GET /api/accounts/{id}", s.handleGetAccount)
 	s.mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
 	s.mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	s.mux.HandleFunc("POST /api/quotas/{id}/action", s.handleQuotaAction)
 	s.mux.HandleFunc("GET /api/stats", s.handleStats)
+	s.mux.HandleFunc("GET /api/activity", s.handleActivity)
 	s.mux.HandleFunc("GET /api/export", s.handleExport)
 	s.mux.HandleFunc("POST /api/import", s.handleImport)
 
@@ -179,6 +181,46 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, quotas.ComputeSummaryStats(accounts))
+}
+
+func (s *Server) handleReorderAccounts(w http.ResponseWriter, r *http.Request) {
+	var req model.ReorderAccountsRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if err := s.store.ReorderAccounts(r.Context(), req.AccountIDs, s.nowFn()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	accounts, err := s.store.ListAccounts(r.Context(), s.nowFn())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, accounts)
+}
+
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if raw := strings.TrimSpace(r.URL.Query().Get("days")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			days = parsed
+		}
+	}
+	now := s.nowFn()
+	accounts, err := s.store.ListAccounts(r.Context(), now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sinceDate := now.AddDate(0, 0, -380).Format("2006-01-02")
+	events, err := s.store.ListQuotaEvents(r.Context(), sinceDate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, quotas.ComputeActivityStats(accounts, events, days, now))
 }
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {

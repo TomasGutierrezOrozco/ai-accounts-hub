@@ -212,3 +212,91 @@ func TestApplyActionSetUsageWithCustomHoursAndUntilTime(t *testing.T) {
 		t.Fatalf("expected 3h30m (12600s) remaining, got %d (used=%.0f)", q.RemainingSeconds, q.UsedValue)
 	}
 }
+
+func TestComputeActivityStatsStreaksModelsAndHeatmap(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	accounts := []model.Account{
+		{
+			ID:           1,
+			Provider:     "Google",
+			Alias:        "Estudiantil",
+			BillingCycle: model.BillingMonthly,
+			Cost:         20000,
+			Currency:     "COP",
+			Quotas: []model.QuotaRule{
+				{WindowType: model.WindowWeeklyCycle, LimitValue: 100, UsedValue: 20, UsagePercent: 20},
+			},
+		},
+		{
+			ID:           2,
+			Provider:     "Google",
+			Alias:        "Backup",
+			BillingCycle: model.BillingAnnual,
+			Cost:         15000,
+			Currency:     "COP",
+		},
+	}
+
+	events := []model.QuotaEvent{
+		{
+			AccountID:         1,
+			AccountAlias:      "Estudiantil",
+			Provider:          "Google",
+			GroupName:         "IDE",
+			Surfaces:          []string{"CLI", "IDE"},
+			Models:            []string{"Gemini 4 Argon", "Claude Sonnet 5.5"},
+			DeltaPercent:      40,
+			UsagePercentAfter: 40,
+			Action:            "set_usage",
+			ModelUsed:         "Gemini 4 Argon",
+			EventDate:         "2026-11-16",
+			CreatedAt:         "2026-11-16T15:00:00Z",
+		},
+		{
+			AccountID:         1,
+			AccountAlias:      "Estudiantil",
+			Provider:          "Google",
+			GroupName:         "IDE",
+			Surfaces:          []string{"CLI"},
+			Models:            []string{"Claude Sonnet 5.5", "Claude Opus 5.5"},
+			DeltaPercent:      60,
+			UsagePercentAfter: 100,
+			Action:            "exhaust_now",
+			EventDate:         "2026-11-17",
+			CreatedAt:         "2026-11-17T16:00:00Z",
+		},
+		{
+			AccountID:         1,
+			AccountAlias:      "Estudiantil",
+			Provider:          "Google",
+			GroupName:         "Web",
+			Surfaces:          []string{"Web"},
+			Models:            []string{"Gemini 4 Argon"},
+			DeltaPercent:      25,
+			UsagePercentAfter: 25,
+			Action:            "set_usage",
+			EventDate:         "2026-11-18",
+			CreatedAt:         "2026-11-18T10:00:00Z",
+		},
+	}
+
+	stats := ComputeActivityStats(accounts, events, 30, now)
+	if stats.CurrentStreak != 3 || stats.LongestStreak != 3 {
+		t.Fatalf("expected 3-day streak, got current=%d longest=%d", stats.CurrentStreak, stats.LongestStreak)
+	}
+	if stats.ActiveDays30d != 3 || stats.Events30d != 3 || stats.CooldownsHit30d != 1 {
+		t.Fatalf("unexpected 30d counts: %+v", stats)
+	}
+	if stats.TopAccount != "Estudiantil" || stats.WeeklyHeadroom != 80 {
+		t.Fatalf("unexpected top account/headroom: %+v", stats)
+	}
+	if len(stats.Heatmap) < 365 || stats.Heatmap[len(stats.Heatmap)-1].Date != "2026-11-18" || stats.Heatmap[len(stats.Heatmap)-1].Level == 0 {
+		t.Fatalf("expected heatmap ending today with active level > 0, got len=%d last=%+v", len(stats.Heatmap), stats.Heatmap[len(stats.Heatmap)-1])
+	}
+	if len(stats.TopModels) == 0 || stats.TopModels[0].Model != "Gemini 4 Argon" || stats.TopModels[0].TotalPercent != 65 {
+		t.Fatalf("expected Gemini 4 Argon top model with 65%% weighted usage, got %+v", stats.TopModels)
+	}
+	if len(stats.AccountUsage30d) != 2 || stats.AccountUsage30d[0].Events != 3 || stats.AccountUsage30d[1].Events != 0 {
+		t.Fatalf("expected per-account breakdown including 0-event account, got %+v", stats.AccountUsage30d)
+	}
+}

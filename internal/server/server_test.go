@@ -138,3 +138,146 @@ func TestAccountCRUDQuotaLifecycleAndBackupRoundtrip(t *testing.T) {
 		t.Fatalf("unexpected stats after import: %+v", stats)
 	}
 }
+
+func TestReorderAccountsAndActivityStats(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	srv := New(store, nil)
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	srv.nowFn = func() time.Time { return now }
+	h := srv.Handler()
+
+	createAccount := func(alias string) model.Account {
+		body, _ := json.Marshal(model.Account{
+			Provider:     "Google",
+			Alias:        alias,
+			BillingCycle: model.BillingMonthly,
+			Cost:         10,
+			Currency:     "USD",
+			Quotas: []model.QuotaRule{
+				{
+					GroupName:   "IDE",
+					Label:       "5h window",
+					ScopeType:   model.ScopeIsolated,
+					Surfaces:    []string{"CLI", "IDE"},
+					Models:      []string{"Claude Sonnet 5.5", "Gemini 4 Argon"},
+					Unit:        "percent",
+					LimitValue:  100,
+					WindowType:  model.WindowRollingHours,
+					WindowHours: 5,
+				},
+			},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/accounts", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %s failed: %d %s", alias, rec.Code, rec.Body.String())
+		}
+		var out model.Account
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+
+	a1 := createAccount("First")
+	a2 := createAccount("Second")
+	a3 := createAccount("Third")
+
+	// Reorder accounts: Third, First, Second
+	reorderBody, _ := json.Marshal(model.ReorderAccountsRequest{
+		AccountIDs: []int64{a3.ID, a1.ID, a2.ID},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/accounts/reorder", bytes.NewReader(reorderBody))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reorder failed: %d %s", rec.Code, rec.Body.String())
+	}
+	var reordered []model.Account
+	_ = json.Unmarshal(rec.Body.Bytes(), &reordered)
+	if len(reordered) != 3 || reordered[0].ID != a3.ID || reordered[1].ID != a1.ID || reordered[2].ID != a2.ID {
+		t.Fatalf("unexpected account order after reorder: %+v", reordered)
+	}
+
+	// Log usage with explicit model_used, verify downward/reset adjustments do NOT log extra events
+	qid := reordered[0].Quotas[0].ID
+	qURL := "/api/quotas/" + strconv.FormatInt(qid, 10) + "/action"
+
+	req = httptest.NewRequest(http.MethodPost, qURL, bytes.NewBufferString(`{"action":"set_usage","value":40,"model_used":"Gemini 4 Argon"}`))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set_usage up failed: %d", rec.Code)
+	}
+
+	// Lower usage typo fix (40 -> 30): should NOT log an activity event
+	req = httptest.NewRequest(http.MethodPost, qURL, bytes.NewBufferString(`{"action":"set_usage","value":30}`))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set_usage down failed: %d", rec.Code)
+	}
+
+	// Exhaust remaining quota -> logs cooldown event
+	req = httptest.NewRequest(http.MethodPost, qURL, bytes.NewBufferString(`{"action":"exhaust_now","model_used":"Claude Sonnet 5.5"}`))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exhaust_now failed: %d", rec.Code)
+	}
+
+	// Reset quota -> should NOT log a usage event
+	req = httptest.NewRequest(http.MethodPost, qURL, bytes.NewBufferString(`{"action":"reset_now"}`))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset_now failed: %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/activity?days=30", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get activity failed: %d %s", rec.Code, rec.Body.String())
+	}
+	var act model.ActivityStats
+	_ = json.Unmarshal(rec.Body.Bytes(), &act)
+	if act.TotalEvents != 2 || act.Events30d != 2 || act.CooldownsHit30d != 1 || act.CurrentStreak != 1 {
+		t.Fatalf("unexpected activity stats: %+v", act)
+	}
+
+	// Export and replace-import preserves both SortOrder and Activity events
+	req = httptest.NewRequest(http.MethodGet, "/api/export", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	exported := rec.Body.Bytes()
+
+	req = httptest.NewRequest(http.MethodPost, "/api/import?mode=replace", bytes.NewReader(exported))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replace import failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/accounts", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var afterImport []model.Account
+	_ = json.Unmarshal(rec.Body.Bytes(), &afterImport)
+	if len(afterImport) != 3 || afterImport[0].Alias != "Third" || afterImport[1].Alias != "First" {
+		t.Fatalf("expected sort order preserved across import, got %+v", afterImport)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/activity?days=30", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var actAfter model.ActivityStats
+	_ = json.Unmarshal(rec.Body.Bytes(), &actAfter)
+	if actAfter.TotalEvents != 2 || actAfter.CooldownsHit30d != 1 {
+		t.Fatalf("expected activity events preserved across import, got %+v", actAfter)
+	}
+}

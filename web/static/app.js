@@ -6,10 +6,16 @@
   const state = {
     accounts: [],
     stats: null,
+    activity: null,
     presets: [],
     activeTab: 'tab-operations',
     clockPaused: false,
     theme: localStorage.getItem('ai_hub_theme') === 'dark' ? 'dark' : 'light',
+    sortMode: localStorage.getItem('ai_hub_sort_mode') === 'readiness' ? 'readiness' : 'custom',
+    reorderMode: false,
+    dragAccountId: null,
+    activityDays: Number(localStorage.getItem('ai_hub_activity_days')) || 30,
+    selectedHeatmapDate: '',
     filters: {
       search: '',
       surface: '',
@@ -77,6 +83,9 @@
     els.clearFiltersBtn = document.getElementById('clear-filters-btn');
 
     els.accountsCountLabel = document.getElementById('accounts-count-label');
+    els.sortModeSelect = document.getElementById('sort-mode-select');
+    els.reorderModeBtn = document.getElementById('reorder-mode-btn');
+    els.reorderHint = document.getElementById('reorder-hint');
     els.toggleAllAccountsBtn = document.getElementById('toggle-all-accounts-btn');
     els.emptyFirstRun = document.getElementById('empty-first-run');
     els.emptyNewAccountBtn = document.getElementById('empty-new-account-btn');
@@ -91,6 +100,20 @@
     els.matrixStatus = document.getElementById('matrix-status');
     els.matrixEmpty = document.getElementById('matrix-empty');
     els.matrixGrid = document.getElementById('matrix-grid');
+
+    els.activityRangeSelect = document.getElementById('activity-range-select');
+    els.activityEmptyHint = document.getElementById('activity-empty-hint');
+    els.activityKpiGrid = document.getElementById('activity-kpi-grid');
+    els.heatmapSummary = document.getElementById('heatmap-summary');
+    els.heatmapMonths = document.getElementById('heatmap-months');
+    els.heatmapGrid = document.getElementById('heatmap-grid');
+    els.heatmapDayDetail = document.getElementById('heatmap-day-detail');
+    els.topModelsWindow = document.getElementById('top-models-window');
+    els.topModelsList = document.getElementById('top-models-list');
+    els.surfacesWindow = document.getElementById('surfaces-window');
+    els.surfacePillsRow = document.getElementById('surface-pills-row');
+    els.activityAccountsWrap = document.getElementById('activity-accounts-wrap');
+    els.activityAccountsTbody = document.getElementById('activity-accounts-tbody');
 
     els.costsEmpty = document.getElementById('costs-empty');
     els.currencySummaryGrid = document.getElementById('currency-summary-grid');
@@ -148,6 +171,8 @@
     els.qmTimeWrap = document.getElementById('qm-time-wrap');
     els.qmUntilDate = document.getElementById('qm-until-date');
     els.qmUntilTime = document.getElementById('qm-until-time');
+    els.qmModelWrap = document.getElementById('qm-model-wrap');
+    els.qmModelUsed = document.getElementById('qm-model-used');
     els.qmGroupWrap = document.getElementById('qm-group-wrap');
     els.qmApplyGroup = document.getElementById('qm-apply-group');
     els.qmApplyGroupLabel = document.getElementById('qm-apply-group-label');
@@ -247,6 +272,40 @@
     els.matrixStatus.addEventListener('change', (e) => {
       state.matrixStatus = e.target.value;
       renderMatrix();
+    });
+
+    els.sortModeSelect.value = state.sortMode;
+    els.sortModeSelect.addEventListener('change', (e) => {
+      state.sortMode = e.target.value === 'readiness' ? 'readiness' : 'custom';
+      localStorage.setItem('ai_hub_sort_mode', state.sortMode);
+      if (state.sortMode !== 'custom') {
+        state.reorderMode = false;
+      }
+      renderOperations();
+    });
+
+    els.reorderModeBtn.addEventListener('click', () => {
+      state.reorderMode = !state.reorderMode;
+      if (state.reorderMode && state.sortMode !== 'custom') {
+        state.sortMode = 'custom';
+        els.sortModeSelect.value = 'custom';
+        localStorage.setItem('ai_hub_sort_mode', 'custom');
+      }
+      renderOperations();
+      announce(state.reorderMode ? 'Reorder mode enabled.' : 'Reorder mode closed.');
+    });
+
+    els.activityRangeSelect.value = String(state.activityDays);
+    els.activityRangeSelect.addEventListener('change', async (e) => {
+      state.activityDays = Number(e.target.value) || 30;
+      localStorage.setItem('ai_hub_activity_days', String(state.activityDays));
+      try {
+        state.activity = await apiFetch(`/api/activity?days=${state.activityDays}`);
+        renderActivity();
+      } catch (err) {
+        els.errorState.hidden = false;
+        els.errorMessage.textContent = err.message;
+      }
     });
 
     els.toggleAllAccountsBtn.addEventListener('click', toggleAllAccountsCollapse);
@@ -356,13 +415,15 @@
     els.panels.forEach((p) => { p.hidden = true; });
 
     try {
-      const [accounts, stats, presets] = await Promise.all([
+      const [accounts, stats, activity, presets] = await Promise.all([
         apiFetch('/api/accounts'),
         apiFetch('/api/stats'),
+        apiFetch(`/api/activity?days=${state.activityDays}`),
         apiFetch('/api/presets')
       ]);
       state.accounts = Array.isArray(accounts) ? accounts : [];
       state.stats = stats;
+      state.activity = activity;
       state.presets = Array.isArray(presets) ? presets : [];
       populatePresetSelect();
       els.loadingState.hidden = true;
@@ -379,12 +440,14 @@
     if (state.refreshInFlight) return;
     state.refreshInFlight = true;
     try {
-      const [accounts, stats] = await Promise.all([
+      const [accounts, stats, activity] = await Promise.all([
         apiFetch('/api/accounts'),
-        apiFetch('/api/stats')
+        apiFetch('/api/stats'),
+        apiFetch(`/api/activity?days=${state.activityDays}`)
       ]);
       state.accounts = Array.isArray(accounts) ? accounts : [];
       state.stats = stats;
+      state.activity = activity;
       els.errorState.hidden = true;
       renderAll();
     } catch (err) {
@@ -440,6 +503,7 @@
   function renderAll() {
     renderOperations();
     renderMatrix();
+    renderActivity();
     renderCosts();
     renderFooter();
     renderHeaderPulse();
@@ -535,6 +599,13 @@
     return [...accounts].sort((a, b) => score(a) - score(b));
   }
 
+  function sortAccountsByMode(accounts) {
+    if (state.sortMode === 'readiness') {
+      return sortAccountsByReadiness(accounts);
+    }
+    return [...accounts];
+  }
+
   function renderOperations() {
     els.clearFiltersBtn.hidden = !hasActiveFilters();
     const advCount = [state.filters.surface, state.filters.scope, state.filters.status].filter(Boolean).length;
@@ -546,20 +617,30 @@
 
     const total = state.accounts.length;
     if (total === 0) {
+      state.reorderMode = false;
       els.emptyFirstRun.hidden = false;
       els.emptyFiltered.hidden = true;
       els.accountsList.innerHTML = '';
       els.accountsCountLabel.textContent = '0 accounts';
       els.toggleAllAccountsBtn.hidden = true;
+      els.reorderModeBtn.hidden = true;
+      els.reorderHint.hidden = true;
       return;
     }
 
     els.emptyFirstRun.hidden = true;
-    const filtered = sortAccountsByReadiness(filterAccounts(state.accounts));
+    const filtered = sortAccountsByMode(filterAccounts(state.accounts));
     const accWord = total === 1 ? 'account' : 'accounts';
     els.accountsCountLabel.textContent = filtered.length === total
       ? `${total} ${accWord}`
       : `${filtered.length} of ${total}`;
+
+    const canReorder = filtered.length > 1 && !hasActiveFilters();
+    if (!canReorder) state.reorderMode = false;
+    els.reorderModeBtn.hidden = !canReorder;
+    els.reorderModeBtn.textContent = state.reorderMode ? 'Done ordering' : 'Reorder';
+    els.reorderModeBtn.setAttribute('aria-pressed', String(state.reorderMode));
+    els.reorderHint.hidden = !state.reorderMode;
 
     const collapsible = filtered.filter((acc) => (acc.quotas || []).length > 0);
     if (collapsible.length > 0 && !hasActiveFilters()) {
@@ -580,9 +661,61 @@
 
     els.emptyFiltered.hidden = true;
     els.accountsList.innerHTML = '';
-    filtered.forEach((acc) => {
-      els.accountsList.appendChild(buildAccountCard(acc));
+    filtered.forEach((acc, idx) => {
+      els.accountsList.appendChild(buildAccountCard(acc, idx, filtered.length));
     });
+  }
+
+  async function moveAccountByDelta(accountId, delta) {
+    const ids = state.accounts.map((a) => a.id);
+    const idx = ids.indexOf(accountId);
+    const nextIdx = idx + delta;
+    if (idx < 0 || nextIdx < 0 || nextIdx >= ids.length) return;
+    [ids[idx], ids[nextIdx]] = [ids[nextIdx], ids[idx]];
+    await persistAccountOrder(ids);
+  }
+
+  async function reorderAccountToTarget(dragId, targetId) {
+    if (!dragId || !targetId || dragId === targetId) return;
+    const ids = state.accounts.map((a) => a.id);
+    const fromIdx = ids.indexOf(dragId);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const [moved] = ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, moved);
+    await persistAccountOrder(ids);
+  }
+
+  async function persistAccountOrder(orderedIDs) {
+    if (state.sortMode !== 'custom') {
+      state.sortMode = 'custom';
+      els.sortModeSelect.value = 'custom';
+      localStorage.setItem('ai_hub_sort_mode', 'custom');
+    }
+    const byId = new Map(state.accounts.map((a) => [a.id, a]));
+    const nextAccounts = [];
+    orderedIDs.forEach((id, i) => {
+      const acc = byId.get(id);
+      if (acc) nextAccounts.push({ ...acc, sort_order: i + 1 });
+    });
+    state.accounts = nextAccounts;
+    renderAll();
+
+    try {
+      const updated = await apiFetch('/api/accounts/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ account_ids: orderedIDs })
+      });
+      if (Array.isArray(updated)) {
+        state.accounts = updated;
+        renderAll();
+      }
+      announce('Account order saved.');
+    } catch (err) {
+      els.errorState.hidden = false;
+      els.errorMessage.textContent = err.message;
+      await refreshData();
+    }
   }
 
   function toggleAllAccountsCollapse() {
@@ -652,9 +785,41 @@
     });
   }
 
-  function buildAccountCard(acc) {
+  function buildAccountCard(acc, idx = 0, totalFiltered = 1) {
     const card = document.createElement('article');
     card.className = 'account-card';
+    if (state.reorderMode) {
+      card.classList.add('is-reordering');
+      card.draggable = true;
+      card.addEventListener('dragstart', (e) => {
+        state.dragAccountId = acc.id;
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(acc.id));
+        }
+      });
+      card.addEventListener('dragover', (e) => {
+        if (!state.dragAccountId || state.dragAccountId === acc.id) return;
+        e.preventDefault();
+        card.classList.add('is-drag-over');
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('is-drag-over');
+      });
+      card.addEventListener('drop', (e) => {
+        e.preventDefault();
+        card.classList.remove('is-drag-over');
+        const dragId = state.dragAccountId;
+        state.dragAccountId = null;
+        if (dragId && dragId !== acc.id) {
+          reorderAccountToTarget(dragId, acc.id);
+        }
+      });
+      card.addEventListener('dragend', () => {
+        state.dragAccountId = null;
+        document.querySelectorAll('.account-card.is-drag-over').forEach((el) => el.classList.remove('is-drag-over'));
+      });
+    }
 
     const groups = groupQuotas(acc);
     const isAccountCollapsed = state.collapsedAccounts.has(acc.id) && !hasActiveFilters();
@@ -748,10 +913,68 @@
       openDeleteModal(acc, menuTrigger);
     });
 
-    menuList.append(editBtn, duplicateBtn, deleteBtn);
+    menuList.append(editBtn, duplicateBtn);
+    if (state.sortMode === 'custom' && !hasActiveFilters() && totalFiltered > 1) {
+      if (idx > 0) {
+        const upMenuBtn = document.createElement('button');
+        upMenuBtn.type = 'button';
+        upMenuBtn.className = 'acc-menu-item';
+        upMenuBtn.textContent = 'Move up';
+        upMenuBtn.addEventListener('click', () => {
+          menu.open = false;
+          moveAccountByDelta(acc.id, -1);
+        });
+        menuList.appendChild(upMenuBtn);
+      }
+      if (idx < totalFiltered - 1) {
+        const downMenuBtn = document.createElement('button');
+        downMenuBtn.type = 'button';
+        downMenuBtn.className = 'acc-menu-item';
+        downMenuBtn.textContent = 'Move down';
+        downMenuBtn.addEventListener('click', () => {
+          menu.open = false;
+          moveAccountByDelta(acc.id, 1);
+        });
+        menuList.appendChild(downMenuBtn);
+      }
+    }
+    menuList.appendChild(deleteBtn);
     menu.append(menuTrigger, menuList);
 
-    header.append(headerLeft, menu);
+    const headerActions = document.createElement('div');
+    headerActions.className = 'acc-header-actions';
+    if (state.reorderMode && totalFiltered > 1) {
+      const reorderCtrls = document.createElement('div');
+      reorderCtrls.className = 'acc-reorder-controls';
+
+      const handle = document.createElement('span');
+      handle.className = 'acc-drag-handle';
+      handle.setAttribute('aria-hidden', 'true');
+      handle.title = 'Drag card to reorder';
+      handle.textContent = '::';
+
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button';
+      upBtn.className = 'btn btn-secondary btn-xs';
+      upBtn.setAttribute('aria-label', `Move ${acc.alias} up`);
+      upBtn.textContent = '↑';
+      upBtn.disabled = idx === 0;
+      upBtn.addEventListener('click', () => moveAccountByDelta(acc.id, -1));
+
+      const downBtn = document.createElement('button');
+      downBtn.type = 'button';
+      downBtn.className = 'btn btn-secondary btn-xs';
+      downBtn.setAttribute('aria-label', `Move ${acc.alias} down`);
+      downBtn.textContent = '↓';
+      downBtn.disabled = idx >= totalFiltered - 1;
+      downBtn.addEventListener('click', () => moveAccountByDelta(acc.id, 1));
+
+      reorderCtrls.append(handle, upBtn, downBtn);
+      headerActions.appendChild(reorderCtrls);
+    }
+    headerActions.appendChild(menu);
+
+    header.append(headerLeft, headerActions);
     card.appendChild(header);
 
     if (isAccountCollapsed) {
@@ -768,8 +991,8 @@
           ? formatDuration(grp.shortestCooldown.remaining_seconds)
           : `${minRem}%`;
         item.textContent = `${grp.name}: ${statusHint}`;
-        if (grp.status === 'cooldown') item.classList.add('is-danger');
-        else if (grp.status === 'warning') item.classList.add('is-warn');
+        const pillTone = getQuotaTone(minRem, grp.status);
+        item.classList.add(`is-${pillTone}`);
         summaryLine.appendChild(item);
       });
       card.appendChild(summaryLine);
@@ -843,9 +1066,21 @@
     return card;
   }
 
+  function getQuotaTone(remPct, status) {
+    if (status === 'cooldown' || remPct <= 15) return 'danger';
+    if (status === 'warning' || remPct < 50) return 'warn';
+    return 'ok';
+  }
+
   function buildQuotaTile(acc, grp, totalGroups) {
     const tile = document.createElement('section');
-    tile.className = `quota-tile is-${grp.status || 'available'}`;
+    const capped = (grp.quotas || []).filter((q) => q.limit_value > 0);
+    const minRem = capped.length > 0
+      ? Math.min(...capped.map((q) => Math.max(0, 100 - (q.usage_percent || 0))))
+      : (grp.status === 'cooldown' ? 0 : 100);
+    const tileTone = getQuotaTone(minRem, grp.status);
+    const tileStateCls = tileTone === 'danger' ? 'is-cooldown' : tileTone === 'warn' ? 'is-warning' : 'is-available';
+    tile.className = `quota-tile ${tileStateCls}`;
 
     const head = document.createElement('div');
     head.className = 'qt-head';
@@ -891,13 +1126,14 @@
   }
 
   function buildQuotaTileRow(acc, q) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `qt-row is-${q.status || 'available'}`;
-
     const remPct = q.limit_value > 0
       ? Math.max(0, Math.min(100, 100 - (q.usage_percent || 0)))
       : (q.status === 'cooldown' ? 0 : 100);
+    const tone = getQuotaTone(remPct, q.status);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `qt-row is-${q.status || 'available'} tone-${tone}`;
     const unitLabel = formatUnit(q.unit);
     let valText = '';
     if (q.limit_value > 0) {
@@ -992,8 +1228,8 @@
     svg.setAttribute('height', String(size));
     svg.setAttribute('aria-hidden', 'true');
     svg.classList.add('quota-ring');
-    if (status === 'cooldown' || remPct <= 0) svg.classList.add('is-danger');
-    else if (status === 'warning') svg.classList.add('is-warn');
+    const tone = getQuotaTone(remPct, status);
+    svg.classList.add(`is-${tone}`);
 
     const radius = 9;
     const circumference = 2 * Math.PI * radius;
@@ -1255,8 +1491,9 @@
             ? 'warning'
             : 'available';
 
+        const matrixTone = hasUngroupedOnly ? '' : getQuotaTone(bestRem, worstStatus);
         const pctEl = document.createElement('span');
-        pctEl.className = `md-acc-pct mono-num ${worstStatus === 'cooldown' ? 'is-danger' : ''}`;
+        pctEl.className = `md-acc-pct mono-num ${matrixTone ? `is-${matrixTone}` : ''}`;
         if (hasUngroupedOnly) {
           pctEl.textContent = 'No group';
         } else if (worstStatus === 'cooldown') {
@@ -1320,6 +1557,220 @@
       card.appendChild(details);
       els.matrixGrid.appendChild(card);
     });
+  }
+
+  function renderActivity() {
+    const act = state.activity;
+    if (!act) return;
+
+    const rangeLabel = act.range_days === 365 ? '12m' : `${act.range_days || 30}d`;
+    els.activityEmptyHint.hidden = act.total_events > 0;
+
+    // 4 KPI blocks
+    els.activityKpiGrid.innerHTML = '';
+    const topModel = (act.top_models && act.top_models.length > 0) ? act.top_models[0] : null;
+    const kpis = [
+      {
+        label: `Active days (${rangeLabel})`,
+        value: `${act.active_days_30d}d`,
+        sub: `Streak ${act.current_streak}d · Best ${act.longest_streak}d`
+      },
+      {
+        label: `Usage logs (${rangeLabel})`,
+        value: String(act.events_30d || 0),
+        sub: `${act.cooldowns_hit_30d || 0} ${(act.cooldowns_hit_30d || 0) === 1 ? 'cooldown' : 'cooldowns'} hit`
+      },
+      {
+        label: `Top model (${rangeLabel})`,
+        value: topModel ? topModel.model : 'None yet',
+        sub: topModel ? `${formatNumber(topModel.total_percent)}% across ${topModel.events} ${topModel.events === 1 ? 'log' : 'logs'}` : 'Log usage to rank'
+      },
+      {
+        label: 'Most active account',
+        value: act.top_account || 'None yet',
+        sub: `Weekly headroom: ${formatNumber(act.weekly_headroom_pct || 0)}%`
+      }
+    ];
+
+    kpis.forEach((item) => {
+      const wrap = document.createElement('div');
+      const lbl = document.createElement('span');
+      lbl.className = 'metric-label';
+      lbl.textContent = item.label;
+      const val = document.createElement('span');
+      val.className = 'metric-value mono-num';
+      val.textContent = item.value;
+      const sub = document.createElement('span');
+      sub.className = 'activity-sub';
+      sub.textContent = item.sub;
+      wrap.append(lbl, val, sub);
+      els.activityKpiGrid.appendChild(wrap);
+    });
+
+    // 52-week Heatmap
+    const days = Array.isArray(act.heatmap) ? act.heatmap : [];
+    const totalYearEvents = days.reduce((s, d) => s + (d.events || 0), 0);
+    const activeYr = act.active_days_365 || 0;
+    els.heatmapSummary.textContent = `${totalYearEvents} ${totalYearEvents === 1 ? 'log' : 'logs'} across ${activeYr} ${activeYr === 1 ? 'active day' : 'active days'} in the last 12 months`;
+
+    els.heatmapMonths.innerHTML = '';
+    els.heatmapGrid.innerHTML = '';
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const totalCols = Math.ceil(days.length / 7);
+    let lastMonth = -1;
+    for (let c = 0; c < totalCols; c++) {
+      const cellDay = days[c * 7];
+      const slot = document.createElement('span');
+      slot.className = 'heatmap-month-label';
+      if (cellDay) {
+        const parts = cellDay.date.split('-').map(Number);
+        const mIdx = (parts[1] || 1) - 1;
+        if (mIdx !== lastMonth && (c === 0 || (parts[2] || 0) <= 14)) {
+          slot.textContent = monthNames[mIdx] || '';
+          lastMonth = mIdx;
+        }
+      }
+      els.heatmapMonths.appendChild(slot);
+    }
+
+    const showDayDetail = (dayObj, btnEl) => {
+      state.selectedHeatmapDate = dayObj.date;
+      els.heatmapGrid.querySelectorAll('.hm-cell.is-selected').forEach((n) => n.classList.remove('is-selected'));
+      if (btnEl) btnEl.classList.add('is-selected');
+      if (!dayObj.events) {
+        els.heatmapDayDetail.textContent = `${dayObj.date}: No AI quota activity logged.`;
+        return;
+      }
+      const parts = [
+        `${dayObj.date}`,
+        `${dayObj.events} ${dayObj.events === 1 ? 'log' : 'logs'}`,
+        `+${formatNumber(dayObj.total_delta_pct)}% quota`
+      ];
+      if (dayObj.cooldowns > 0) parts.push(`${dayObj.cooldowns} cooldown`);
+      if (dayObj.models && dayObj.models.length > 0) parts.push(`Models: ${dayObj.models.join(', ')}`);
+      else if (dayObj.accounts && dayObj.accounts.length > 0) parts.push(`Accounts: ${dayObj.accounts.join(', ')}`);
+      els.heatmapDayDetail.textContent = parts.join(' · ');
+    };
+
+    let defaultDay = days.length > 0 ? days[days.length - 1] : null;
+    days.forEach((d) => {
+      if (d.date === state.selectedHeatmapDate) defaultDay = d;
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = `hm-cell hm-lvl-${d.level || 0}`;
+      const label = d.events > 0
+        ? `${d.date}: ${d.events} logs, +${formatNumber(d.total_delta_pct)}%`
+        : `${d.date}: no logs`;
+      cell.setAttribute('aria-label', label);
+      cell.title = label;
+      cell.addEventListener('mouseenter', () => showDayDetail(d, cell));
+      cell.addEventListener('focus', () => showDayDetail(d, cell));
+      cell.addEventListener('click', () => showDayDetail(d, cell));
+      els.heatmapGrid.appendChild(cell);
+      if (defaultDay && d.date === defaultDay.date) {
+        showDayDetail(d, cell);
+      }
+    });
+
+    // Most Used Models
+    els.topModelsWindow.textContent = `Last ${rangeLabel}`;
+    els.topModelsList.innerHTML = '';
+    const topModels = Array.isArray(act.top_models) ? act.top_models.slice(0, 8) : [];
+    if (topModels.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'activity-sub';
+      empty.textContent = 'No model usage recorded in this period yet.';
+      els.topModelsList.appendChild(empty);
+    } else {
+      const maxVal = Math.max(...topModels.map((m) => m.total_percent || m.events || 1), 1);
+      topModels.forEach((m) => {
+        const row = document.createElement('div');
+        row.className = 'insight-bar-row';
+
+        const head = document.createElement('div');
+        head.className = 'insight-bar-head';
+        const name = document.createElement('span');
+        name.className = 'insight-bar-name';
+        name.textContent = m.model;
+        const meta = document.createElement('span');
+        meta.className = 'insight-bar-meta';
+        meta.textContent = `${formatNumber(m.total_percent)}% · ${m.events} ${m.events === 1 ? 'log' : 'logs'}`;
+        head.append(name, meta);
+
+        const track = document.createElement('div');
+        track.className = 'insight-bar-track';
+        const fill = document.createElement('div');
+        fill.className = 'insight-bar-fill';
+        const pctWidth = Math.max(4, Math.min(100, Math.round(((m.total_percent || m.events) / maxVal) * 100)));
+        fill.style.width = `${pctWidth}%`;
+        track.appendChild(fill);
+
+        row.append(head, track);
+        els.topModelsList.appendChild(row);
+      });
+    }
+
+    // Surfaces & Per-account activity
+    els.surfacesWindow.textContent = `Last ${rangeLabel}`;
+    els.surfacePillsRow.innerHTML = '';
+    const surfs = Array.isArray(act.surface_breakdown) ? act.surface_breakdown : [];
+    if (surfs.length === 0) {
+      const emptySurf = document.createElement('p');
+      emptySurf.className = 'activity-sub';
+      emptySurf.textContent = 'Surface breakdown appears as you log usage across Web, CLI, or IDE.';
+      els.surfacePillsRow.appendChild(emptySurf);
+    } else {
+      surfs.forEach((s) => {
+        const pill = document.createElement('span');
+        pill.className = 'surface-stat-pill';
+        const sName = document.createElement('span');
+        sName.className = 'surface-stat-name';
+        sName.textContent = s.surface;
+        const sVal = document.createElement('span');
+        sVal.className = 'surface-stat-val';
+        sVal.textContent = `${s.events} · ${formatNumber(s.total_percent)}%`;
+        pill.append(sName, sVal);
+        els.surfacePillsRow.appendChild(pill);
+      });
+    }
+
+    els.activityAccountsTbody.innerHTML = '';
+    const accRows = Array.isArray(act.account_usage_30d) ? act.account_usage_30d : [];
+    if (accRows.length === 0) {
+      els.activityAccountsWrap.hidden = true;
+    } else {
+      els.activityAccountsWrap.hidden = false;
+      accRows.forEach((r) => {
+        const tr = document.createElement('tr');
+
+        const tdAcc = document.createElement('td');
+        tdAcc.setAttribute('data-label', 'Account');
+        tdAcc.textContent = r.alias;
+
+        const tdLogs = document.createElement('td');
+        tdLogs.setAttribute('data-label', 'Logs');
+        tdLogs.className = 'mono-num';
+        tdLogs.textContent = String(r.events || 0);
+
+        const tdPct = document.createElement('td');
+        tdPct.setAttribute('data-label', 'Used %');
+        tdPct.className = 'mono-num';
+        tdPct.textContent = `${formatNumber(r.total_percent || 0)}%`;
+
+        const tdCd = document.createElement('td');
+        tdCd.setAttribute('data-label', 'Cooldowns');
+        tdCd.className = 'mono-num';
+        tdCd.textContent = String(r.cooldowns || 0);
+
+        const tdCost = document.createElement('td');
+        tdCost.setAttribute('data-label', 'Cost');
+        tdCost.className = 'mono-num';
+        tdCost.textContent = formatAccountCost(r);
+
+        tr.append(tdAcc, tdLogs, tdPct, tdCd, tdCost);
+        els.activityAccountsTbody.appendChild(tr);
+      });
+    }
   }
 
   function renderCosts() {
@@ -2138,6 +2589,32 @@
     els.qmResetBtn.hidden = !(q.used_value > 0 || Boolean(q.resets_at));
     els.qmExhaustBtn.hidden = q.status === 'cooldown';
 
+    const groupModels = Array.isArray(q.models) ? q.models.filter(Boolean) : [];
+    els.qmModelUsed.innerHTML = '';
+    if (groupModels.length > 1) {
+      const allOpt = document.createElement('option');
+      allOpt.value = '';
+      allOpt.textContent = `All models in group (${groupModels.length})`;
+      els.qmModelUsed.appendChild(allOpt);
+      groupModels.forEach((mName) => {
+        const opt = document.createElement('option');
+        opt.value = mName;
+        opt.textContent = mName;
+        els.qmModelUsed.appendChild(opt);
+      });
+      els.qmModelUsed.value = '';
+      els.qmModelWrap.hidden = false;
+    } else if (groupModels.length === 1) {
+      const onlyOpt = document.createElement('option');
+      onlyOpt.value = groupModels[0];
+      onlyOpt.textContent = groupModels[0];
+      els.qmModelUsed.appendChild(onlyOpt);
+      els.qmModelUsed.value = groupModels[0];
+      els.qmModelWrap.hidden = true;
+    } else {
+      els.qmModelWrap.hidden = true;
+    }
+
     updateQuotaTimerVisibility();
     els.quotaModal.showModal();
     els.qmVal.focus();
@@ -2237,10 +2714,12 @@
     const usedVal = (q.limit_value > 0 && els.qmValMode.value === 'remaining')
       ? Math.max(0, Math.round((q.limit_value - enteredVal) * 1000) / 1000)
       : enteredVal;
+    const modelUsed = els.qmModelUsed ? els.qmModelUsed.value : '';
 
     await runQuotaModalActions(() => ({
       action: 'set_usage',
       value: usedVal,
+      model_used: modelUsed,
       ...timerRes.fields
     }));
   }
@@ -2254,8 +2733,10 @@
       if (timerRes.focusEl) timerRes.focusEl.focus();
       return;
     }
+    const modelUsed = els.qmModelUsed ? els.qmModelUsed.value : '';
     await runQuotaModalActions(() => ({
       action: 'exhaust_now',
+      model_used: modelUsed,
       ...timerRes.fields
     }));
   }

@@ -51,6 +51,9 @@
         <button type="button" role="tab" id="tab-matrix" aria-selected="false" aria-controls="panel-matrix" tabindex="-1" class="tab-btn">
           Models & Scopes
         </button>
+        <button type="button" role="tab" id="tab-activity" aria-selected="false" aria-controls="panel-activity" tabindex="-1" class="tab-btn">
+          Activity
+        </button>
         <button type="button" role="tab" id="tab-costs" aria-selected="false" aria-controls="panel-costs" tabindex="-1" class="tab-btn">
           Billing & Renewals
         </button>
@@ -84,11 +87,19 @@
           </div>
           <div class="filter-actions">
             <span id="accounts-count-label" class="mono-meta dispatch-count-meta"></span>
+            <label for="sort-mode-select" class="sr-only">Account sort order</label>
+            <select id="sort-mode-select" class="compact-select" aria-label="Account sort order">
+              <option value="custom">Custom order</option>
+              <option value="readiness">Ready first</option>
+            </select>
+            <button type="button" id="reorder-mode-btn" class="btn btn-secondary btn-sm" aria-pressed="false" hidden>Reorder</button>
             <button type="button" id="toggle-filters-btn" class="btn btn-secondary btn-sm" aria-expanded="false" aria-controls="advanced-filters-row">Filters</button>
             <button type="button" id="clear-filters-btn" class="btn btn-ghost btn-sm" hidden>Clear</button>
             <button type="button" id="toggle-all-accounts-btn" class="btn btn-ghost btn-sm" hidden>Collapse all</button>
           </div>
         </div>
+
+        <p id="reorder-hint" class="reorder-banner" hidden>Reorder mode active: drag account cards or use the Up and Down buttons. Changes save automatically.</p>
 
         <div id="advanced-filters-row" class="dispatch-advanced-row" hidden>
           <div class="filter-field">
@@ -187,6 +198,89 @@
       <div id="matrix-grid" class="models-directory-grid" hidden></div>
     </section>
 
+    <section id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" class="tab-panel" hidden>
+      <div class="activity-header-row">
+        <div>
+          <h2 class="section-heading">Usage & Activity</h2>
+          <p class="section-lead">Daily AI usage log, active streaks, top models, and account utilization over time.</p>
+        </div>
+        <div class="activity-range-wrap">
+          <label for="activity-range-select" class="sr-only">Activity timeframe</label>
+          <select id="activity-range-select" class="compact-select">
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="365">Last 12 months</option>
+          </select>
+        </div>
+      </div>
+
+      <p id="activity-empty-hint" class="activity-hint-line" hidden>
+        No usage events logged yet. Whenever you adjust usage or exhaust a quota on Accounts &amp; Quotas, daily activity, streaks, and model rankings record automatically here.
+      </p>
+
+      <div id="activity-kpi-grid" class="currency-metrics activity-kpi-grid"></div>
+
+      <article class="activity-card">
+        <div class="activity-card-head">
+          <div>
+            <h3 class="subsection-heading">Daily Usage Heatmap (52 weeks)</h3>
+            <p id="heatmap-summary" class="activity-sub"></p>
+          </div>
+          <div class="heatmap-legend" aria-label="Activity intensity scale">
+            <span>Less</span>
+            <span class="hm-cell hm-lvl-0" aria-hidden="true"></span>
+            <span class="hm-cell hm-lvl-1" aria-hidden="true"></span>
+            <span class="hm-cell hm-lvl-2" aria-hidden="true"></span>
+            <span class="hm-cell hm-lvl-3" aria-hidden="true"></span>
+            <span class="hm-cell hm-lvl-4" aria-hidden="true"></span>
+            <span>More</span>
+          </div>
+        </div>
+        <div class="heatmap-scroll">
+          <div id="heatmap-months" class="heatmap-months"></div>
+          <div class="heatmap-body">
+            <div class="heatmap-weekdays" aria-hidden="true">
+              <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span>
+            </div>
+            <div id="heatmap-grid" class="heatmap-grid" role="grid" aria-label="52-week usage heatmap"></div>
+          </div>
+        </div>
+        <p id="heatmap-day-detail" class="heatmap-day-detail mono-num">Hover or select a day to inspect usage details.</p>
+      </article>
+
+      <div class="activity-split-grid">
+        <article class="activity-card">
+          <div class="activity-card-head">
+            <h3 class="subsection-heading">Most Used Models</h3>
+            <span id="top-models-window" class="mono-meta"></span>
+          </div>
+          <div id="top-models-list" class="insight-bars"></div>
+        </article>
+
+        <article class="activity-card">
+          <div class="activity-card-head">
+            <h3 class="subsection-heading">Surfaces & Account Activity</h3>
+            <span id="surfaces-window" class="mono-meta"></span>
+          </div>
+          <div id="surface-pills-row" class="surface-breakdown-row"></div>
+          <div id="activity-accounts-wrap" class="activity-accounts-table-wrap">
+            <table class="data-table data-table-compact">
+              <thead>
+                <tr>
+                  <th scope="col">Account</th>
+                  <th scope="col">Logs</th>
+                  <th scope="col">Used %</th>
+                  <th scope="col">Cooldowns</th>
+                  <th scope="col">Cost</th>
+                </tr>
+              </thead>
+              <tbody id="activity-accounts-tbody"></tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section id="panel-costs" role="tabpanel" aria-labelledby="tab-costs" class="tab-panel" hidden>
       <div class="section-header-row">
         <div>
@@ -260,7 +354,7 @@
 
   <footer class="app-footer">
     <div class="footer-inner">
-      <span>AI Accounts Hub: local SQLite storage, zero external calls.</span>
+      <span>AI Accounts Hub</span>
       <span id="footer-stats" class="mono-meta"></span>
     </div>
   </footer>
@@ -449,6 +543,11 @@
               <label for="qm-until-time">Exact time (24h) *</label>
               <input type="time" id="qm-until-time">
             </div>
+          </div>
+
+          <div id="qm-model-wrap" class="form-field" hidden>
+            <label for="qm-model-used">Model used (optional)</label>
+            <select id="qm-model-used"></select>
           </div>
 
           <label id="qm-group-wrap" class="check-pill" hidden>

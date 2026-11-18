@@ -7,9 +7,10 @@ Built as a single dependency-free Go binary (`CGO_ENABLED=0`) with embedded SQLi
 ## Features
 
 - **100% local and private**: Stores everything in a local SQLite database with zero third-party API calls, telemetry, or external font CDNs.
-- **Account cards & grouped quota tiles**: Organize accounts into pools (such as Web vs CLI/IDE) with shared or exclusive scope markers, click-to-adjust percentage/unit rows, and SVG remaining rings.
+- **Account cards & grouped quota tiles**: Organize accounts into pools (such as Web vs CLI/IDE) with shared or exclusive scope markers, click-to-adjust percentage/unit rows, traffic-light status bars + SVG remaining rings, and persistent custom account ordering (`Reorder` drag & drop or Up/Down controls).
 - **Flexible reset windows & exact timers**: Supports rolling hour windows (e.g., 5h), daily fixed-time resets, 7-day rolling or fixed-weekday weekly cycles, monthly cycles, and manual prepaid balances. Set remaining usage alongside either `D / H / M` countdowns (`6d 21h`, `2h 31m`) or exact reset timestamps (`HH:MM`).
 - **Models & Scopes Directory**: Unified model view showing which accounts provide each model, current remaining percentage, ready counts (`3/3 ready`), and collapsible scope/app details.
+- **Usage & Activity**: GitHub-style 52-week daily usage heatmap, active day streaks, cooldown counters, most-used models ranking, surface mix, and per-account utilization vs cost.
 - **Billing & Renewals**: Currency-grouped spending summary (monthly equivalent, direct monthly, direct annual, annual projection, and prepaid balances) plus urgency-tagged renewal schedule.
 - **Starter templates**: 11 built-in templates covering Anthropic Claude (Pro, Max, Ultra), OpenAI ChatGPT (Plus, Pro 100), Cursor Premium, GitHub Copilot (Pro, Pro+), Google AI (Pro, Ultra 5x), and Prepaid API Consoles.
 - **JSON Backup & Restore**: Full export and merge/replace import for moving data between environments.

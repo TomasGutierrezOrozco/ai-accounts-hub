@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 	models_json TEXT NOT NULL DEFAULT '[]',
 	apps_json TEXT NOT NULL DEFAULT '[]',
 	notes TEXT NOT NULL DEFAULT '',
+	sort_order INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 );
@@ -95,11 +96,36 @@ CREATE TABLE IF NOT EXISTS quotas (
 );
 
 CREATE INDEX IF NOT EXISTS idx_quotas_account_id ON quotas(account_id);
+
+CREATE TABLE IF NOT EXISTS quota_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	account_id INTEGER NOT NULL,
+	account_alias TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL DEFAULT '',
+	quota_id INTEGER NOT NULL DEFAULT 0,
+	quota_label TEXT NOT NULL DEFAULT '',
+	group_name TEXT NOT NULL DEFAULT '',
+	surfaces_json TEXT NOT NULL DEFAULT '[]',
+	models_json TEXT NOT NULL DEFAULT '[]',
+	unit TEXT NOT NULL DEFAULT 'percent',
+	delta_used REAL NOT NULL DEFAULT 0,
+	delta_percent REAL NOT NULL DEFAULT 0,
+	used_after REAL NOT NULL DEFAULT 0,
+	usage_percent_after REAL NOT NULL DEFAULT 0,
+	action TEXT NOT NULL DEFAULT '',
+	model_used TEXT NOT NULL DEFAULT '',
+	event_date TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_quota_events_date ON quota_events(event_date);
+CREATE INDEX IF NOT EXISTS idx_quota_events_account ON quota_events(account_id);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate sqlite schema: %w", err)
 	}
 	// Backfill columns added after initial schema creation.
+	_, _ = s.db.Exec(`ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;`)
 	_, _ = s.db.Exec(`ALTER TABLE quotas ADD COLUMN weekly_reset_day INTEGER NOT NULL DEFAULT 0;`)
 	_, _ = s.db.Exec(`ALTER TABLE quotas ADD COLUMN group_name TEXT NOT NULL DEFAULT '';`)
 	_, _ = s.db.Exec(`ALTER TABLE quotas ADD COLUMN models_json TEXT NOT NULL DEFAULT '[]';`)
@@ -109,9 +135,9 @@ CREATE INDEX IF NOT EXISTS idx_quotas_account_id ON quotas(account_id);
 func (s *Store) ListAccounts(ctx context.Context, now time.Time) ([]model.Account, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, provider, alias, identifier, plan_name, billing_cycle, cost, currency,
-		       renewal_date, payment_notes, models_json, apps_json, notes, created_at, updated_at
+		       renewal_date, payment_notes, models_json, apps_json, notes, sort_order, created_at, updated_at
 		FROM accounts
-		ORDER BY provider ASC, alias ASC, id ASC
+		ORDER BY CASE WHEN sort_order > 0 THEN sort_order ELSE 999999 END ASC, id ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -127,7 +153,7 @@ func (s *Store) ListAccounts(ctx context.Context, now time.Time) ([]model.Accoun
 		if err := rows.Scan(
 			&acc.ID, &acc.Provider, &acc.Alias, &acc.Identifier, &acc.PlanName,
 			&acc.BillingCycle, &acc.Cost, &acc.Currency, &acc.RenewalDate, &acc.PaymentNotes,
-			&modelsJSON, &appsJSON, &acc.Notes, &acc.CreatedAt, &acc.UpdatedAt,
+			&modelsJSON, &appsJSON, &acc.Notes, &acc.SortOrder, &acc.CreatedAt, &acc.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -194,12 +220,12 @@ func (s *Store) GetAccount(ctx context.Context, id int64, now time.Time) (model.
 	var modelsJSON, appsJSON string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, provider, alias, identifier, plan_name, billing_cycle, cost, currency,
-		       renewal_date, payment_notes, models_json, apps_json, notes, created_at, updated_at
+		       renewal_date, payment_notes, models_json, apps_json, notes, sort_order, created_at, updated_at
 		FROM accounts WHERE id = ?
 	`, id).Scan(
 		&acc.ID, &acc.Provider, &acc.Alias, &acc.Identifier, &acc.PlanName,
 		&acc.BillingCycle, &acc.Cost, &acc.Currency, &acc.RenewalDate, &acc.PaymentNotes,
-		&modelsJSON, &appsJSON, &acc.Notes, &acc.CreatedAt, &acc.UpdatedAt,
+		&modelsJSON, &appsJSON, &acc.Notes, &acc.SortOrder, &acc.CreatedAt, &acc.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return acc, ErrNotFound
@@ -291,12 +317,15 @@ func (s *Store) UpdateAccount(ctx context.Context, id int64, acc model.Account, 
 		UPDATE accounts
 		SET provider = ?, alias = ?, identifier = ?, plan_name = ?, billing_cycle = ?,
 		    cost = ?, currency = ?, renewal_date = ?, payment_notes = ?,
-		    models_json = ?, apps_json = ?, notes = ?, updated_at = ?
+		    models_json = ?, apps_json = ?, notes = ?,
+		    sort_order = CASE WHEN ? > 0 THEN ? ELSE sort_order END,
+		    updated_at = ?
 		WHERE id = ?
 	`,
 		acc.Provider, acc.Alias, acc.Identifier, acc.PlanName, acc.BillingCycle,
 		acc.Cost, acc.Currency, acc.RenewalDate, acc.PaymentNotes,
-		encodeStringSlice(acc.Models), encodeStringSlice(acc.Apps), acc.Notes, ts, id,
+		encodeStringSlice(acc.Models), encodeStringSlice(acc.Apps), acc.Notes,
+		acc.SortOrder, acc.SortOrder, ts, id,
 	)
 	if err != nil {
 		return acc, err
@@ -340,17 +369,79 @@ func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *Store) ReorderAccounts(ctx context.Context, orderedIDs []int64, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM accounts
+		ORDER BY CASE WHEN sort_order > 0 THEN sort_order ELSE 999999 END ASC, id ASC
+	`)
+	if err != nil {
+		return err
+	}
+	existing := make([]int64, 0)
+	existingSet := make(map[int64]struct{})
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		existing = append(existing, id)
+		existingSet[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+
+	finalOrder := make([]int64, 0, len(existing))
+	seen := make(map[int64]struct{}, len(existing))
+	for _, id := range orderedIDs {
+		if _, exists := existingSet[id]; !exists {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		finalOrder = append(finalOrder, id)
+	}
+	for _, id := range existing {
+		if _, ok := seen[id]; !ok {
+			finalOrder = append(finalOrder, id)
+		}
+	}
+
+	ts := now.UTC().Format(time.RFC3339)
+	for i, id := range finalOrder {
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET sort_order = ?, updated_at = ? WHERE id = ?`, i+1, ts, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) ApplyQuotaAction(ctx context.Context, quotaID int64, req model.QuotaActionRequest, now time.Time) (model.QuotaRule, error) {
 	var q model.QuotaRule
-	var surfacesJSON, qModelsJSON string
+	var surfacesJSON, qModelsJSON, accAlias, accProvider string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, account_id, group_name, label, scope_type, surfaces_json, models_json, unit, limit_value, used_value,
-		       window_type, window_hours, daily_reset_time, weekly_reset_day, monthly_reset_day, window_started_at, resets_at
-		FROM quotas WHERE id = ?
+		SELECT q.id, q.account_id, q.group_name, q.label, q.scope_type, q.surfaces_json, q.models_json, q.unit, q.limit_value, q.used_value,
+		       q.window_type, q.window_hours, q.daily_reset_time, q.weekly_reset_day, q.monthly_reset_day, q.window_started_at, q.resets_at,
+		       a.alias, a.provider
+		FROM quotas q
+		JOIN accounts a ON a.id = q.account_id
+		WHERE q.id = ?
 	`, quotaID).Scan(
 		&q.ID, &q.AccountID, &q.GroupName, &q.Label, &q.ScopeType, &surfacesJSON, &qModelsJSON, &q.Unit,
 		&q.LimitValue, &q.UsedValue, &q.WindowType, &q.WindowHours,
 		&q.DailyResetTime, &q.WeeklyResetDay, &q.MonthlyResetDay, &q.WindowStartedAt, &q.ResetsAt,
+		&accAlias, &accProvider,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return q, ErrNotFound
@@ -363,6 +454,8 @@ func (s *Store) ApplyQuotaAction(ctx context.Context, quotaID int64, req model.Q
 
 	// Evaluate pending auto-reset before applying a new manual action.
 	quotas.EvaluateQuota(&q, now)
+	prevUsed := q.UsedValue
+	prevPct := q.UsagePercent
 
 	if err := quotas.ApplyAction(&q, req, now); err != nil {
 		return q, err
@@ -371,7 +464,95 @@ func (s *Store) ApplyQuotaAction(ctx context.Context, quotaID int64, req model.Q
 	if err := s.persistQuotaState(ctx, q); err != nil {
 		return q, err
 	}
+
+	deltaUsed := q.UsedValue - prevUsed
+	deltaPct := q.UsagePercent - prevPct
+	if deltaPct < 0 {
+		deltaPct = 0
+	}
+	shouldRecord := deltaUsed > 0.0001 || (req.Action == "exhaust_now" && prevPct < 100)
+	if shouldRecord {
+		if deltaUsed < 0 {
+			deltaUsed = 0
+		}
+		ev := model.QuotaEvent{
+			AccountID:         q.AccountID,
+			AccountAlias:      accAlias,
+			Provider:          accProvider,
+			QuotaID:           q.ID,
+			QuotaLabel:        q.Label,
+			GroupName:         q.GroupName,
+			Surfaces:          q.Surfaces,
+			Models:            q.Models,
+			Unit:              q.Unit,
+			DeltaUsed:         deltaUsed,
+			DeltaPercent:      deltaPct,
+			UsedAfter:         q.UsedValue,
+			UsagePercentAfter: q.UsagePercent,
+			Action:            req.Action,
+			ModelUsed:         strings.TrimSpace(req.ModelUsed),
+			EventDate:         now.Format("2006-01-02"),
+			CreatedAt:         now.UTC().Format(time.RFC3339),
+		}
+		if err := s.insertQuotaEvent(ctx, ev); err != nil {
+			return q, err
+		}
+	}
 	return q, nil
+}
+
+func (s *Store) insertQuotaEvent(ctx context.Context, ev model.QuotaEvent) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO quota_events (
+			account_id, account_alias, provider, quota_id, quota_label, group_name,
+			surfaces_json, models_json, unit, delta_used, delta_percent,
+			used_after, usage_percent_after, action, model_used, event_date, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		ev.AccountID, ev.AccountAlias, ev.Provider, ev.QuotaID, ev.QuotaLabel, ev.GroupName,
+		encodeStringSlice(ev.Surfaces), encodeStringSlice(ev.Models), ev.Unit,
+		ev.DeltaUsed, ev.DeltaPercent, ev.UsedAfter, ev.UsagePercentAfter,
+		ev.Action, ev.ModelUsed, ev.EventDate, ev.CreatedAt,
+	)
+	return err
+}
+
+func (s *Store) ListQuotaEvents(ctx context.Context, sinceDate string) ([]model.QuotaEvent, error) {
+	query := `
+		SELECT id, account_id, account_alias, provider, quota_id, quota_label, group_name,
+		       surfaces_json, models_json, unit, delta_used, delta_percent,
+		       used_after, usage_percent_after, action, model_used, event_date, created_at
+		FROM quota_events
+	`
+	args := make([]any, 0, 1)
+	if strings.TrimSpace(sinceDate) != "" {
+		query += ` WHERE event_date >= ?`
+		args = append(args, sinceDate)
+	}
+	query += ` ORDER BY event_date ASC, id ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]model.QuotaEvent, 0)
+	for rows.Next() {
+		var ev model.QuotaEvent
+		var surfacesJSON, modelsJSON string
+		if err := rows.Scan(
+			&ev.ID, &ev.AccountID, &ev.AccountAlias, &ev.Provider, &ev.QuotaID, &ev.QuotaLabel, &ev.GroupName,
+			&surfacesJSON, &modelsJSON, &ev.Unit, &ev.DeltaUsed, &ev.DeltaPercent,
+			&ev.UsedAfter, &ev.UsagePercentAfter, &ev.Action, &ev.ModelUsed, &ev.EventDate, &ev.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		ev.Surfaces = decodeStringSlice(surfacesJSON)
+		ev.Models = decodeStringSlice(modelsJSON)
+		events = append(events, ev)
+	}
+	return events, rows.Err()
 }
 
 func (s *Store) ExportAll(ctx context.Context, now time.Time) (model.ExportPayload, error) {
@@ -379,10 +560,15 @@ func (s *Store) ExportAll(ctx context.Context, now time.Time) (model.ExportPaylo
 	if err != nil {
 		return model.ExportPayload{}, err
 	}
+	events, err := s.ListQuotaEvents(ctx, "")
+	if err != nil {
+		return model.ExportPayload{}, err
+	}
 	return model.ExportPayload{
 		Version:    1,
 		ExportedAt: now.UTC().Format(time.RFC3339),
 		Accounts:   accounts,
+		Events:     events,
 	}, nil
 }
 
@@ -403,11 +589,58 @@ func (s *Store) ImportAll(ctx context.Context, payload model.ExportPayload, repl
 		if _, err := tx.ExecContext(ctx, `DELETE FROM accounts`); err != nil {
 			return 0, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM quota_events`); err != nil {
+			return 0, err
+		}
 	}
 
 	ts := now.UTC().Format(time.RFC3339)
+	idMap := make(map[int64]int64, len(payload.Accounts))
 	for _, acc := range payload.Accounts {
-		if _, err := insertAccountTx(ctx, tx, acc, ts); err != nil {
+		oldID := acc.ID
+		newID, err := insertAccountTx(ctx, tx, acc, ts)
+		if err != nil {
+			return 0, err
+		}
+		if oldID > 0 {
+			idMap[oldID] = newID
+		}
+	}
+
+	for _, ev := range payload.Events {
+		mappedAccID := ev.AccountID
+		if newID, ok := idMap[ev.AccountID]; ok {
+			mappedAccID = newID
+		}
+		if ev.EventDate == "" {
+			if t, err := time.Parse(time.RFC3339, ev.CreatedAt); err == nil {
+				ev.EventDate = t.In(now.Location()).Format("2006-01-02")
+			} else {
+				ev.EventDate = now.Format("2006-01-02")
+			}
+		}
+		if !replace {
+			var dup int
+			_ = tx.QueryRowContext(ctx, `
+				SELECT COUNT(1) FROM quota_events
+				WHERE created_at = ? AND account_alias = ? AND quota_label = ? AND action = ?
+			`, ev.CreatedAt, ev.AccountAlias, ev.QuotaLabel, ev.Action).Scan(&dup)
+			if dup > 0 {
+				continue
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO quota_events (
+				account_id, account_alias, provider, quota_id, quota_label, group_name,
+				surfaces_json, models_json, unit, delta_used, delta_percent,
+				used_after, usage_percent_after, action, model_used, event_date, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			mappedAccID, ev.AccountAlias, ev.Provider, ev.QuotaID, ev.QuotaLabel, ev.GroupName,
+			encodeStringSlice(ev.Surfaces), encodeStringSlice(ev.Models), ev.Unit,
+			ev.DeltaUsed, ev.DeltaPercent, ev.UsedAfter, ev.UsagePercentAfter,
+			ev.Action, ev.ModelUsed, ev.EventDate, ev.CreatedAt,
+		); err != nil {
 			return 0, err
 		}
 	}
@@ -428,15 +661,21 @@ func (s *Store) persistQuotaState(ctx context.Context, q model.QuotaRule) error 
 }
 
 func insertAccountTx(ctx context.Context, tx *sql.Tx, acc model.Account, ts string) (int64, error) {
+	sortOrder := acc.SortOrder
+	if sortOrder <= 0 {
+		var maxOrder int
+		_ = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sort_order), 0) FROM accounts`).Scan(&maxOrder)
+		sortOrder = maxOrder + 1
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO accounts (
 			provider, alias, identifier, plan_name, billing_cycle, cost, currency,
-			renewal_date, payment_notes, models_json, apps_json, notes, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			renewal_date, payment_notes, models_json, apps_json, notes, sort_order, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		acc.Provider, acc.Alias, acc.Identifier, acc.PlanName, acc.BillingCycle,
 		acc.Cost, acc.Currency, acc.RenewalDate, acc.PaymentNotes,
-		encodeStringSlice(acc.Models), encodeStringSlice(acc.Apps), acc.Notes, ts, ts,
+		encodeStringSlice(acc.Models), encodeStringSlice(acc.Apps), acc.Notes, sortOrder, ts, ts,
 	)
 	if err != nil {
 		return 0, err
