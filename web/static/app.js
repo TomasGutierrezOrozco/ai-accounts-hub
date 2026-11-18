@@ -864,14 +864,7 @@
     providerPill.textContent = acc.plan_name ? `${acc.provider} · ${acc.plan_name}` : acc.provider;
     titleLine.appendChild(providerPill);
 
-    const metaParts = [formatAccountCost(acc)];
-    if (acc.identifier) metaParts.push(acc.identifier);
-    if (acc.renewal_date) metaParts.push(`Renews ${acc.renewal_date}`);
-    const metaEl = document.createElement('p');
-    metaEl.className = 'account-meta mono-num';
-    metaEl.textContent = metaParts.join(' · ');
-
-    titleGroup.append(titleLine, metaEl);
+    titleGroup.appendChild(titleLine);
     headerLeft.appendChild(titleGroup);
 
     // Kebab menu (···) replacing repetitive text buttons
@@ -1842,6 +1835,11 @@
       tdAcc.setAttribute('data-label', 'Account');
       tdAcc.textContent = `${acc.provider} (${acc.alias})`;
 
+      const tdEmail = document.createElement('td');
+      tdEmail.setAttribute('data-label', 'Email');
+      tdEmail.className = 'mono-num';
+      tdEmail.textContent = acc.identifier || 'Not set';
+
       const tdPlan = document.createElement('td');
       tdPlan.setAttribute('data-label', 'Plan & cycle');
       tdPlan.textContent = `${acc.plan_name || 'No plan'} | ${formatBillingCycle(acc.billing_cycle)}`;
@@ -1881,7 +1879,7 @@
       editBtn.addEventListener('click', (e) => openAccountModal(acc, e.currentTarget));
       tdAction.appendChild(editBtn);
 
-      tr.append(tdAcc, tdPlan, tdCost, tdDate, tdCountdown, tdNotes, tdAction);
+      tr.append(tdAcc, tdEmail, tdPlan, tdCost, tdDate, tdCountdown, tdNotes, tdAction);
       els.renewalsTbody.appendChild(tr);
     });
   }
