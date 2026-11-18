@@ -470,7 +470,7 @@ func (s *Store) ApplyQuotaAction(ctx context.Context, quotaID int64, req model.Q
 	if deltaPct < 0 {
 		deltaPct = 0
 	}
-	shouldRecord := deltaUsed > 0.0001 || (req.Action == "exhaust_now" && prevPct < 100)
+	shouldRecord := !req.SkipActivity && (deltaUsed > 0.0001 || (req.Action == "exhaust_now" && prevPct < 100))
 	if shouldRecord {
 		if deltaUsed < 0 {
 			deltaUsed = 0

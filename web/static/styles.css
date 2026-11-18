@@ -776,24 +776,26 @@ textarea::placeholder {
 .account-collapsed-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 16px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  gap: 8px 18px;
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
 
-.collapsed-group-pill.is-ok {
-  color: var(--status-ok);
-  font-weight: 500;
+.collapsed-group-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
 }
 
-.collapsed-group-pill.is-danger {
-  color: var(--status-danger);
-  font-weight: 500;
+.cg-name {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
 }
 
-.collapsed-group-pill.is-warn {
-  color: var(--status-warn);
+.cg-val {
+  color: var(--text-primary);
+  font-size: 0.78rem;
   font-weight: 500;
 }
 

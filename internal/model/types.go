@@ -74,12 +74,13 @@ type QuotaRule struct {
 }
 
 type QuotaActionRequest struct {
-	Action      string  `json:"action"`
-	Delta       float64 `json:"delta,omitempty"`
-	Value       float64 `json:"value,omitempty"`
-	CustomHours float64 `json:"custom_hours,omitempty"`
-	UntilTime   string  `json:"until_time,omitempty"`
-	ModelUsed   string  `json:"model_used,omitempty"`
+	Action       string  `json:"action"`
+	Delta        float64 `json:"delta,omitempty"`
+	Value        float64 `json:"value,omitempty"`
+	CustomHours  float64 `json:"custom_hours,omitempty"`
+	UntilTime    string  `json:"until_time,omitempty"`
+	ModelUsed    string  `json:"model_used,omitempty"`
+	SkipActivity bool    `json:"skip_activity,omitempty"`
 }
 
 type ReorderAccountsRequest struct {
@@ -121,6 +122,7 @@ type ModelUsageStat struct {
 	Model        string   `json:"model"`
 	Events       int      `json:"events"`
 	TotalPercent float64  `json:"total_percent"`
+	SharePercent float64  `json:"share_percent"`
 	Accounts     []string `json:"accounts"`
 }
 
@@ -128,6 +130,7 @@ type SurfaceUsageStat struct {
 	Surface      string  `json:"surface"`
 	Events       int     `json:"events"`
 	TotalPercent float64 `json:"total_percent"`
+	SharePercent float64 `json:"share_percent"`
 }
 
 type AccountActivityStat struct {
@@ -139,6 +142,7 @@ type AccountActivityStat struct {
 	Currency     string  `json:"currency"`
 	Events       int     `json:"events"`
 	TotalPercent float64 `json:"total_percent"`
+	SharePercent float64 `json:"share_percent"`
 	Cooldowns    int     `json:"cooldowns"`
 }
 

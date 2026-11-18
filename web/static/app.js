@@ -986,13 +986,20 @@
         const capped = (grp.quotas || []).filter((q) => q.limit_value > 0);
         const minRem = capped.length > 0
           ? Math.min(...capped.map((q) => Math.max(0, 100 - (q.usage_percent || 0))))
-          : 100;
+          : (grp.status === 'cooldown' ? 0 : 100);
         const statusHint = grp.status === 'cooldown' && grp.shortestCooldown
           ? formatDuration(grp.shortestCooldown.remaining_seconds)
           : `${minRem}%`;
-        item.textContent = `${grp.name}: ${statusHint}`;
-        const pillTone = getQuotaTone(minRem, grp.status);
-        item.classList.add(`is-${pillTone}`);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'cg-name';
+        nameSpan.textContent = grp.name;
+
+        const valSpan = document.createElement('span');
+        valSpan.className = 'cg-val mono-num';
+        valSpan.textContent = statusHint;
+
+        item.append(nameSpan, buildQuotaRingSvg(minRem, grp.status, 14), valSpan);
         summaryLine.appendChild(item);
       });
       card.appendChild(summaryLine);
@@ -1583,7 +1590,7 @@
       {
         label: `Top model (${rangeLabel})`,
         value: topModel ? topModel.model : 'None yet',
-        sub: topModel ? `${formatNumber(topModel.total_percent)}% across ${topModel.events} ${topModel.events === 1 ? 'log' : 'logs'}` : 'Log usage to rank'
+        sub: topModel ? `${formatNumber(topModel.share_percent || 0)}% share (${topModel.events} ${topModel.events === 1 ? 'log' : 'logs'})` : 'Log usage to rank'
       },
       {
         label: 'Most active account',
@@ -1643,10 +1650,9 @@
       }
       const parts = [
         `${dayObj.date}`,
-        `${dayObj.events} ${dayObj.events === 1 ? 'log' : 'logs'}`,
-        `+${formatNumber(dayObj.total_delta_pct)}% quota`
+        `${dayObj.events} ${dayObj.events === 1 ? 'log' : 'logs'}`
       ];
-      if (dayObj.cooldowns > 0) parts.push(`${dayObj.cooldowns} cooldown`);
+      if (dayObj.cooldowns > 0) parts.push(`${dayObj.cooldowns} ${dayObj.cooldowns === 1 ? 'cooldown' : 'cooldowns'}`);
       if (dayObj.models && dayObj.models.length > 0) parts.push(`Models: ${dayObj.models.join(', ')}`);
       else if (dayObj.accounts && dayObj.accounts.length > 0) parts.push(`Accounts: ${dayObj.accounts.join(', ')}`);
       els.heatmapDayDetail.textContent = parts.join(' · ');
@@ -1659,7 +1665,7 @@
       cell.type = 'button';
       cell.className = `hm-cell hm-lvl-${d.level || 0}`;
       const label = d.events > 0
-        ? `${d.date}: ${d.events} logs, +${formatNumber(d.total_delta_pct)}%`
+        ? `${d.date}: ${d.events} ${d.events === 1 ? 'log' : 'logs'}`
         : `${d.date}: no logs`;
       cell.setAttribute('aria-label', label);
       cell.title = label;
@@ -1682,7 +1688,7 @@
       empty.textContent = 'No model usage recorded in this period yet.';
       els.topModelsList.appendChild(empty);
     } else {
-      const maxVal = Math.max(...topModels.map((m) => m.total_percent || m.events || 1), 1);
+      const maxVal = Math.max(...topModels.map((m) => m.share_percent || m.events || 1), 1);
       topModels.forEach((m) => {
         const row = document.createElement('div');
         row.className = 'insight-bar-row';
@@ -1694,14 +1700,14 @@
         name.textContent = m.model;
         const meta = document.createElement('span');
         meta.className = 'insight-bar-meta';
-        meta.textContent = `${formatNumber(m.total_percent)}% · ${m.events} ${m.events === 1 ? 'log' : 'logs'}`;
+        meta.textContent = `${m.events} ${m.events === 1 ? 'log' : 'logs'} · ${formatNumber(m.share_percent || 0)}% share`;
         head.append(name, meta);
 
         const track = document.createElement('div');
         track.className = 'insight-bar-track';
         const fill = document.createElement('div');
         fill.className = 'insight-bar-fill';
-        const pctWidth = Math.max(4, Math.min(100, Math.round(((m.total_percent || m.events) / maxVal) * 100)));
+        const pctWidth = Math.max(4, Math.min(100, Math.round(((m.share_percent || m.events) / maxVal) * 100)));
         fill.style.width = `${pctWidth}%`;
         track.appendChild(fill);
 
@@ -1728,7 +1734,7 @@
         sName.textContent = s.surface;
         const sVal = document.createElement('span');
         sVal.className = 'surface-stat-val';
-        sVal.textContent = `${s.events} · ${formatNumber(s.total_percent)}%`;
+        sVal.textContent = `${s.events} · ${formatNumber(s.share_percent || 0)}%`;
         pill.append(sName, sVal);
         els.surfacePillsRow.appendChild(pill);
       });
@@ -1753,9 +1759,9 @@
         tdLogs.textContent = String(r.events || 0);
 
         const tdPct = document.createElement('td');
-        tdPct.setAttribute('data-label', 'Used %');
+        tdPct.setAttribute('data-label', 'Share');
         tdPct.className = 'mono-num';
-        tdPct.textContent = `${formatNumber(r.total_percent || 0)}%`;
+        tdPct.textContent = `${formatNumber(r.share_percent || 0)}%`;
 
         const tdCd = document.createElement('td');
         tdCd.setAttribute('data-label', 'Cooldowns');
@@ -2673,10 +2679,13 @@
       targetIds.push(...siblingIds);
     }
     try {
-      for (const id of targetIds) {
+      for (let i = 0; i < targetIds.length; i++) {
+        const id = targetIds[i];
+        const body = makePayload(id);
+        if (i > 0) body.skip_activity = true;
         await apiFetch(`/api/quotas/${id}/action`, {
           method: 'POST',
-          body: JSON.stringify(makePayload(id))
+          body: JSON.stringify(body)
         });
       }
       closeDialog(els.quotaModal);

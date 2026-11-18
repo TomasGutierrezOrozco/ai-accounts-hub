@@ -209,18 +209,36 @@ func ComputeActivityStats(accounts []model.Account, events []model.QuotaEvent, r
 	}
 	stats.Heatmap = heatmap
 
+	totalModelWeight := 0.0
+	for _, ma := range modelStats {
+		w := ma.pct
+		if w <= 0 {
+			w = float64(ma.events)
+		}
+		totalModelWeight += w
+	}
+
 	stats.TopModels = make([]model.ModelUsageStat, 0, len(modelStats))
 	for _, ma := range modelStats {
+		share := 0.0
+		w := ma.pct
+		if w <= 0 {
+			w = float64(ma.events)
+		}
+		if totalModelWeight > 0 {
+			share = math.Round((w/totalModelWeight)*1000) / 10
+		}
 		stats.TopModels = append(stats.TopModels, model.ModelUsageStat{
 			Model:        ma.display,
 			Events:       ma.events,
 			TotalPercent: math.Round(ma.pct*10) / 10,
+			SharePercent: share,
 			Accounts:     sortedMapKeys(ma.accs),
 		})
 	}
 	sort.Slice(stats.TopModels, func(i, j int) bool {
-		if stats.TopModels[i].TotalPercent != stats.TopModels[j].TotalPercent {
-			return stats.TopModels[i].TotalPercent > stats.TopModels[j].TotalPercent
+		if stats.TopModels[i].SharePercent != stats.TopModels[j].SharePercent {
+			return stats.TopModels[i].SharePercent > stats.TopModels[j].SharePercent
 		}
 		if stats.TopModels[i].Events != stats.TopModels[j].Events {
 			return stats.TopModels[i].Events > stats.TopModels[j].Events
@@ -228,17 +246,35 @@ func ComputeActivityStats(accounts []model.Account, events []model.QuotaEvent, r
 		return stats.TopModels[i].Model < stats.TopModels[j].Model
 	})
 
+	totalSurfWeight := 0.0
+	for _, sa := range surfaceStats {
+		w := sa.pct
+		if w <= 0 {
+			w = float64(sa.events)
+		}
+		totalSurfWeight += w
+	}
+
 	stats.SurfaceBreakdown = make([]model.SurfaceUsageStat, 0, len(surfaceStats))
 	for surf, sa := range surfaceStats {
+		share := 0.0
+		w := sa.pct
+		if w <= 0 {
+			w = float64(sa.events)
+		}
+		if totalSurfWeight > 0 {
+			share = math.Round((w/totalSurfWeight)*1000) / 10
+		}
 		stats.SurfaceBreakdown = append(stats.SurfaceBreakdown, model.SurfaceUsageStat{
 			Surface:      surf,
 			Events:       sa.events,
 			TotalPercent: math.Round(sa.pct*10) / 10,
+			SharePercent: share,
 		})
 	}
 	sort.Slice(stats.SurfaceBreakdown, func(i, j int) bool {
-		if stats.SurfaceBreakdown[i].TotalPercent != stats.SurfaceBreakdown[j].TotalPercent {
-			return stats.SurfaceBreakdown[i].TotalPercent > stats.SurfaceBreakdown[j].TotalPercent
+		if stats.SurfaceBreakdown[i].SharePercent != stats.SurfaceBreakdown[j].SharePercent {
+			return stats.SurfaceBreakdown[i].SharePercent > stats.SurfaceBreakdown[j].SharePercent
 		}
 		return stats.SurfaceBreakdown[i].Surface < stats.SurfaceBreakdown[j].Surface
 	})
@@ -257,6 +293,9 @@ func ComputeActivityStats(accounts []model.Account, events []model.QuotaEvent, r
 		if aa != nil {
 			row.Events = aa.events
 			row.TotalPercent = math.Round(aa.pct*10) / 10
+			if stats.Events30d > 0 {
+				row.SharePercent = math.Round((float64(aa.events)/float64(stats.Events30d))*1000) / 10
+			}
 			row.Cooldowns = aa.cooldowns
 		}
 		stats.AccountUsage30d = append(stats.AccountUsage30d, row)
