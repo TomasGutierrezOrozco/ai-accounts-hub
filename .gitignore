@@ -1,0 +1,28 @@
+# Compiled binaries
+ai-accounts-hub
+ai-accounts-hub-*
+*.exe
+dist/
+bin/
+
+# SQLite databases & local data directories
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Personal backups & environment overrides
+*backup*.json
+.env
+.env.*
+
+# Test & coverage artifacts
+coverage.out
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/

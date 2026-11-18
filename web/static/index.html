@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Accounts Hub | Self-hosted AI Quotas & Subscriptions</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header class="app-header">
+    <div class="masthead-inner">
+      <div class="brand-block">
+        <h1 class="brand-title">AI Accounts Hub</h1>
+        <p id="header-live-pulse" class="brand-pulse mono-meta">Local ledger for AI accounts, quotas & resets</p>
+      </div>
+
+      <div class="header-controls">
+        <button type="button" id="clock-toggle-btn" class="btn btn-ghost btn-sm" aria-pressed="false">
+          <svg class="icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="8" cy="8" r="6.5"></circle>
+            <path d="M8 4.5V8l2.5 1.5"></path>
+          </svg>
+          <span id="clock-toggle-label">Pause clock</span>
+        </button>
+
+        <button type="button" id="theme-toggle-btn" class="btn btn-ghost btn-sm" aria-pressed="false">
+          <svg class="icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="8" cy="8" r="3.2"></circle>
+            <path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"></path>
+          </svg>
+          <span id="theme-toggle-label">Warm Paper</span>
+        </button>
+
+        <button type="button" id="new-account-btn" class="btn btn-primary">
+          <svg class="icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M8 3v10M3 8h10"></path>
+          </svg>
+          <span>Add account</span>
+        </button>
+      </div>
+    </div>
+
+    <nav class="main-nav" aria-label="Primary navigation">
+      <div class="nav-inner" role="tablist" aria-label="Workspace sections">
+        <button type="button" role="tab" id="tab-operations" aria-selected="true" aria-controls="panel-operations" class="tab-btn">
+          Accounts & Quotas
+        </button>
+        <button type="button" role="tab" id="tab-matrix" aria-selected="false" aria-controls="panel-matrix" tabindex="-1" class="tab-btn">
+          Models & Scopes
+        </button>
+        <button type="button" role="tab" id="tab-costs" aria-selected="false" aria-controls="panel-costs" tabindex="-1" class="tab-btn">
+          Billing & Renewals
+        </button>
+        <button type="button" role="tab" id="tab-backup" aria-selected="false" aria-controls="panel-backup" tabindex="-1" class="tab-btn">
+          JSON Backup
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main-content" class="main-container" tabindex="-1">
+    <div id="live-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+    <div id="loading-state" class="state-box" role="status">
+      <p class="state-title">Loading accounts and quota status from SQLite...</p>
+      <p class="state-detail">Evaluating active reset windows.</p>
+    </div>
+
+    <div id="error-state" class="state-box state-error" role="alert" hidden>
+      <p class="state-title">Could not connect to local server</p>
+      <p id="error-message" class="state-detail"></p>
+      <button type="button" id="retry-load-btn" class="btn btn-secondary">Retry connection</button>
+    </div>
+
+    <section id="panel-operations" role="tabpanel" aria-labelledby="tab-operations" class="tab-panel">
+      <div class="dispatch-bar" aria-label="Availability filters and controls">
+        <div class="dispatch-primary-row">
+          <div class="filter-field filter-search-field">
+            <label for="filter-search" class="sr-only">Search model, provider, or account</label>
+            <input type="search" id="filter-search" placeholder="Search model, provider, or account (e.g. Sonnet, Google, Personal)...">
+          </div>
+          <div class="filter-actions">
+            <span id="accounts-count-label" class="mono-meta dispatch-count-meta"></span>
+            <button type="button" id="toggle-filters-btn" class="btn btn-secondary btn-sm" aria-expanded="false" aria-controls="advanced-filters-row">Filters</button>
+            <button type="button" id="clear-filters-btn" class="btn btn-ghost btn-sm" hidden>Clear</button>
+            <button type="button" id="toggle-all-accounts-btn" class="btn btn-ghost btn-sm" hidden>Collapse all</button>
+          </div>
+        </div>
+
+        <div id="advanced-filters-row" class="dispatch-advanced-row" hidden>
+          <div class="filter-field">
+            <label for="filter-surface">Surface</label>
+            <select id="filter-surface">
+              <option value="">All surfaces</option>
+              <option value="Web">Web</option>
+              <option value="CLI">CLI</option>
+              <option value="IDE">IDE</option>
+              <option value="Desktop">Desktop</option>
+              <option value="Mobile">Mobile</option>
+              <option value="API">API</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="filter-scope">Quota Scope</label>
+            <select id="filter-scope">
+              <option value="">All scopes</option>
+              <option value="shared">Shared (Web + App/CLI)</option>
+              <option value="isolated">Isolated / Exclusive</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="filter-status">Status</label>
+            <select id="filter-status">
+              <option value="">All statuses</option>
+              <option value="available">Ready</option>
+              <option value="warning">Near limit</option>
+              <option value="cooldown">Exhausted</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <section aria-label="Configured accounts and limits" class="accounts-section">
+        <div id="empty-first-run" class="empty-state" hidden>
+          <h3>No AI accounts registered yet</h3>
+          <p>Add your first subscription or prepaid API balance to track rolling hours, weekly limits, and Web vs CLI/IDE isolation.</p>
+          <div class="empty-actions">
+            <button type="button" id="empty-new-account-btn" class="btn btn-primary">Add first account</button>
+            <button type="button" id="empty-load-preset-btn" class="btn btn-secondary">Pick a provider preset</button>
+          </div>
+        </div>
+
+        <div id="empty-filtered" class="empty-state" hidden>
+          <h3>No accounts match the active filters</h3>
+          <p id="empty-filtered-detail">Try adjusting the search query, surface, or quota status.</p>
+          <div class="empty-actions">
+            <button type="button" id="empty-clear-filters-btn" class="btn btn-secondary">Clear filters</button>
+          </div>
+        </div>
+
+        <div id="accounts-list" class="accounts-stack"></div>
+      </section>
+    </section>
+
+    <section id="panel-matrix" role="tabpanel" aria-labelledby="tab-matrix" class="tab-panel" hidden>
+      <div class="matrix-header-block">
+        <div>
+          <h2 class="section-heading">Models & Scopes Directory</h2>
+          <p class="section-lead">Quick overview of which accounts offer each model, remaining capacity, and whether limits are shared or isolated across surfaces.</p>
+        </div>
+        <div class="matrix-controls-bar">
+          <div class="matrix-filter">
+            <label for="matrix-search">Filter by model or account</label>
+            <input type="search" id="matrix-search" placeholder="e.g. Sonnet, GPT-6, Gemini 4, Grok...">
+          </div>
+          <div class="matrix-filter-compact">
+            <label for="matrix-surface">Surface</label>
+            <select id="matrix-surface">
+              <option value="">All surfaces</option>
+              <option value="Web">Web</option>
+              <option value="CLI">CLI</option>
+              <option value="IDE">IDE</option>
+              <option value="Mobile">Mobile</option>
+              <option value="API">API</option>
+            </select>
+          </div>
+          <div class="matrix-filter-compact">
+            <label for="matrix-status">Availability</label>
+            <select id="matrix-status">
+              <option value="">All</option>
+              <option value="ready">Ready only</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div id="matrix-empty" class="empty-state" hidden>
+        <h3>No models to display</h3>
+        <p>Add an account and list its available models to build the directory.</p>
+      </div>
+
+      <div id="matrix-grid" class="models-directory-grid" hidden></div>
+    </section>
+
+    <section id="panel-costs" role="tabpanel" aria-labelledby="tab-costs" class="tab-panel" hidden>
+      <div class="section-header-row">
+        <div>
+          <h2 class="section-heading">Billing & Renewals</h2>
+          <p class="section-lead">Totals calculated directly from your local accounts, grouped by currency.</p>
+        </div>
+      </div>
+
+      <div id="costs-empty" class="empty-state" hidden>
+        <h3>No subscriptions or balances recorded</h3>
+        <p>Once you add accounts with billing cycles and amounts, monthly equivalents and renewal dates appear here.</p>
+      </div>
+
+      <div id="currency-summary-grid" class="currency-ledger"></div>
+
+      <div id="renewals-wrap" class="table-wrap" hidden>
+        <h3 class="subsection-heading">Renewal Schedule</h3>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Account</th>
+              <th scope="col">Plan & Cycle</th>
+              <th scope="col">Amount</th>
+              <th scope="col">Renewal Date</th>
+              <th scope="col">Time Left</th>
+              <th scope="col">Payment Notes</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody id="renewals-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="panel-backup" role="tabpanel" aria-labelledby="tab-backup" class="tab-panel" hidden>
+      <div class="section-header-row">
+        <div>
+          <h2 class="section-heading">Local Backup & Portability</h2>
+          <p class="section-lead">All data stays locally in SQLite. Export or restore your accounts in JSON format anytime.</p>
+        </div>
+      </div>
+
+      <div class="backup-layout">
+        <article class="backup-pane">
+          <h3>Export Full Configuration</h3>
+          <p>Download a JSON file containing all accounts, models, apps, billing details, and quota rules.</p>
+          <a href="/api/export" class="btn btn-primary" download="ai-accounts-backup.json">Download JSON backup</a>
+        </article>
+
+        <article class="backup-pane">
+          <h3>Import from JSON File</h3>
+          <form id="import-form" class="stack-form">
+            <div class="form-field">
+              <label for="import-file">Backup file (.json)</label>
+              <input type="file" id="import-file" accept=".json,application/json" required>
+            </div>
+            <div class="form-field">
+              <label for="import-mode">Import mode</label>
+              <select id="import-mode">
+                <option value="append">Append to existing accounts</option>
+                <option value="replace">Replace all existing accounts</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-secondary">Import backup</button>
+            <p id="import-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+          </form>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <div class="footer-inner">
+      <span>AI Accounts Hub: local SQLite storage, zero external calls.</span>
+      <span id="footer-stats" class="mono-meta"></span>
+    </div>
+  </footer>
+
+  <dialog id="account-modal" class="modal-dialog" aria-labelledby="account-modal-title">
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h2 id="account-modal-title">Add AI account</h2>
+        <button type="button" id="close-account-modal" class="btn-icon" aria-label="Close modal">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M4 4l8 8M12 4l-8 8"></path>
+          </svg>
+        </button>
+      </div>
+
+      <form id="account-form" class="modal-form" novalidate>
+        <div class="modal-body">
+          <input type="hidden" id="acc-id">
+
+          <div class="preset-bar">
+            <div class="form-field">
+              <label for="preset-select">Quick provider preset (optional)</label>
+              <select id="preset-select">
+                <option value="">Select a preset to autofill...</option>
+              </select>
+            </div>
+            <button type="button" id="apply-preset-btn" class="btn btn-secondary">Apply preset</button>
+          </div>
+
+          <div id="account-form-error" class="form-error-banner" role="alert" hidden></div>
+
+          <fieldset class="form-fieldset">
+            <legend>Subscription & Billing</legend>
+            <div class="form-grid-2">
+              <div class="form-field">
+                <label for="acc-provider">Provider *</label>
+                <input type="text" id="acc-provider" required placeholder="e.g. Anthropic, OpenAI, Cursor">
+              </div>
+              <div class="form-field">
+                <label for="acc-alias">Account alias *</label>
+                <input type="text" id="acc-alias" required placeholder="e.g. Personal Pro, Work Backend">
+              </div>
+              <div class="form-field">
+                <label for="acc-identifier">Email or identifier</label>
+                <input type="text" id="acc-identifier" placeholder="account@example.com">
+              </div>
+              <div class="form-field">
+                <label for="acc-plan">Plan / Tier</label>
+                <input type="text" id="acc-plan" placeholder="e.g. Pro, Plus, Max, Prepaid API">
+              </div>
+              <div class="form-field">
+                <label for="acc-billing-cycle">Billing cycle</label>
+                <select id="acc-billing-cycle">
+                  <option value="monthly">Monthly</option>
+                  <option value="annual">Annual</option>
+                  <option value="prepaid">Prepaid / Credits</option>
+                  <option value="free">Free</option>
+                </select>
+              </div>
+              <div class="form-grid-inline">
+                <div class="form-field">
+                  <label for="acc-cost">Amount paid</label>
+                  <input type="number" id="acc-cost" min="0" step="0.01" value="0">
+                </div>
+                <div class="form-field">
+                  <label for="acc-currency">Currency</label>
+                  <input type="text" id="acc-currency" maxlength="6" value="USD" placeholder="USD">
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="acc-renewal">Renewal date</label>
+                <input type="date" id="acc-renewal">
+              </div>
+              <div class="form-field">
+                <label for="acc-payment-notes">Payment notes</label>
+                <input type="text" id="acc-payment-notes" placeholder="e.g. Card ending in 4210">
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-fieldset">
+            <legend>Available Models & Apps</legend>
+            <div class="form-grid-2">
+              <div class="form-field">
+                <div class="field-label-row">
+                  <label for="acc-models">Available models (comma-separated)</label>
+                  <button type="button" id="sync-models-btn" class="btn btn-ghost btn-xs">Sync from groups</button>
+                </div>
+                <textarea id="acc-models" rows="2" placeholder="Claude Sonnet 4.6, GPT-6 Sol, Gemini 4 Argon"></textarea>
+              </div>
+              <div class="form-field">
+                <label for="acc-apps">Apps / tools (comma-separated)</label>
+                <textarea id="acc-apps" rows="2" placeholder="Web (claude.ai), Claude Code CLI, VS Code"></textarea>
+              </div>
+            </div>
+            <div class="form-field">
+              <label for="acc-notes">Account notes</label>
+              <textarea id="acc-notes" rows="2" placeholder="Notes about shared caps or intended usage"></textarea>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-fieldset">
+            <legend>Quota Groups & Reset Windows</legend>
+            <div class="quotas-editor-header">
+              <p class="helper-text">Each group shares models, surfaces, and isolation scope across its windows (e.g. 5h + Weekly).</p>
+              <div class="quotas-editor-actions">
+                <button type="button" id="add-quota-pair-btn" class="btn btn-secondary btn-sm">+ 5h + Weekly Group</button>
+                <button type="button" id="add-quota-rule-btn" class="btn btn-secondary btn-sm">+ Single Group</button>
+              </div>
+            </div>
+            <div id="quotas-editor-list" class="quotas-editor-list"></div>
+            <div class="quotas-editor-bottom">
+              <button type="button" id="add-quota-pair-bottom-btn" class="btn btn-ghost btn-sm">+ Another (5h + Weekly) group</button>
+              <button type="button" id="add-quota-rule-bottom-btn" class="btn btn-ghost btn-sm">+ Another single group</button>
+            </div>
+          </fieldset>
+        </div>
+
+        <div class="modal-footer modal-footer-sticky">
+          <button type="button" id="cancel-account-modal" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="save-account-btn" class="btn btn-primary">Save account</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="quota-modal" class="modal-dialog modal-compact" aria-labelledby="quota-modal-title">
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h2 id="quota-modal-title">Adjust Quota & Reset</h2>
+        <button type="button" id="close-quota-modal" class="btn-icon" aria-label="Close modal">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M4 4l8 8M12 4l-8 8"></path>
+          </svg>
+        </button>
+      </div>
+      <form id="quota-form" class="modal-form" novalidate>
+        <div class="modal-body">
+          <input type="hidden" id="qm-quota-id">
+          <p id="qm-context" class="qm-context-line"></p>
+
+          <div class="qm-val-grid">
+            <div class="form-field">
+              <label for="qm-val-mode">Mode</label>
+              <select id="qm-val-mode">
+                <option value="remaining">Remaining</option>
+                <option value="used">Used</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label id="qm-val-label" for="qm-val">Remaining (%)</label>
+              <input type="number" id="qm-val" min="0" step="any" required>
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label for="qm-timer-mode">Time until reset</label>
+            <select id="qm-timer-mode">
+              <option value="auto">Automatic (quota rule)</option>
+              <option value="duration">In D / H / M (e.g. 6d 21h or 2h 31m)</option>
+              <option value="until_time">Exact date & time (24h)</option>
+            </select>
+          </div>
+
+          <div id="qm-dhm-wrap" class="qm-dhm-grid" hidden>
+            <div class="form-field">
+              <label for="qm-days">Days</label>
+              <input type="number" id="qm-days" min="0" max="31" step="1" value="0">
+            </div>
+            <div class="form-field">
+              <label for="qm-hours">Hours</label>
+              <input type="number" id="qm-hours" min="0" max="23" step="1" value="0">
+            </div>
+            <div class="form-field">
+              <label for="qm-mins">Minutes</label>
+              <input type="number" id="qm-mins" min="0" max="59" step="1" value="0">
+            </div>
+          </div>
+
+          <div id="qm-time-wrap" class="form-grid-2" hidden>
+            <div class="form-field">
+              <label for="qm-until-date">Date (optional, e.g. weekly)</label>
+              <input type="date" id="qm-until-date">
+            </div>
+            <div class="form-field">
+              <label for="qm-until-time">Exact time (24h) *</label>
+              <input type="time" id="qm-until-time">
+            </div>
+          </div>
+
+          <label id="qm-group-wrap" class="check-pill" hidden>
+            <input type="checkbox" id="qm-apply-group">
+            <span id="qm-apply-group-label">Also apply to other windows in this group</span>
+          </label>
+
+          <div id="qm-form-error" class="form-error-banner" role="alert" hidden></div>
+        </div>
+
+        <div class="modal-footer modal-footer-between modal-footer-sticky">
+          <div class="qm-quick-actions">
+            <button type="button" id="qm-reset-btn" class="btn btn-ghost btn-sm" hidden>Reset 100%</button>
+            <button type="button" id="qm-exhaust-btn" class="btn btn-secondary btn-sm">Exhaust 0%</button>
+          </div>
+          <div class="qm-primary-actions">
+            <button type="button" id="cancel-quota-modal" class="btn btn-secondary btn-sm">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="delete-modal" class="modal-dialog modal-compact" aria-labelledby="delete-modal-title">
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h2 id="delete-modal-title">Delete account</h2>
+        <button type="button" id="close-delete-modal" class="btn-icon" aria-label="Close modal">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M4 4l8 8M12 4l-8 8"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="delete-account-id">
+        <p id="delete-confirm-text">This will permanently delete the selected account and its quota rules.</p>
+        <div class="modal-footer">
+          <button type="button" id="cancel-delete-modal" class="btn btn-secondary">Keep account</button>
+          <button type="button" id="confirm-delete-btn" class="btn btn-danger">Delete permanently</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

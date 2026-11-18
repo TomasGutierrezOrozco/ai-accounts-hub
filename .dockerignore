@@ -1,0 +1,16 @@
+.git
+.github
+ai-accounts-hub
+ai-accounts-hub-*
+*.exe
+*.db
+*.db-wal
+*.db-shm
+data/
+dist/
+*backup*.json
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/
